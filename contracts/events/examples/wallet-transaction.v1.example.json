@@ -10,8 +10,8 @@
     "user_id": "3f2504e0-4f89-11d3-9a0c-0305e82c3303",
     "wallet_id": "b3f8a2f8-2222-4d0a-9a2f-1e6a4a3b2c12",
     "kind": "bet_payout",
-    "amount_minor": 17500,
-    "balance_after_minor": 42500,
+    "amount_minor": 18000,
+    "balance_after_minor": 43000,
     "currency": "EUR",
     "ref_type": "round",
     "ref_id": "3f2504e0-4f89-11d3-9a0c-0305e82c3301"

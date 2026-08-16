@@ -17,13 +17,13 @@
         "bet_type": "straight",
         "selection": { "numbers": [17] },
         "stake_minor": 500,
-        "payout_minor": 17500,
+        "payout_minor": 18000,
         "won": true
       }
     ],
     "total_stake_minor": 500,
-    "total_payout_minor": 17500,
-    "net_minor": 17000,
+    "total_payout_minor": 18000,
+    "net_minor": 17500,
     "currency": "EUR"
   }
 }
