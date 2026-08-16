@@ -1,0 +1,20 @@
+# entornos y secretos
+.venv/
+.env
+.env.*
+!.env.example
+
+# python
+__pycache__/
+*.py[cod]
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# editores / sistema
+.idea/
+.vscode/
+.DS_Store
