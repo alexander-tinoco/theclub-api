@@ -21,6 +21,7 @@ dev = [
     "watchfiles>=0.24",
     "jsonschema>=4.23",
     "types-jsonschema>=4.23",
+    "hypothesis>=6.100",
 ]
 
 [tool.uv]

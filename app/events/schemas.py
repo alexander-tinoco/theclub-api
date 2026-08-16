@@ -5,10 +5,11 @@ Schema son el contrato público hacia `theclub-web` y `theclub-data`, estos mode
 lo que usa `app` internamente al escribir el outbox (Fase 6). `tests/unit/test_event_contracts.py`
 valida los mismos ejemplos contra ambos para que no se desincronicen.
 
-Una asimetría intencional: `selection` aquí es `dict[str, int | list[int]]` (más
-estricto que el `type: object` sin restricciones del JSON Schema). El JSON Schema
-documenta la forma pública sin atarse a un tipo interno; Pydantic sí impone ese tipo
-porque es lo que el dominio de la ruleta (Fase 2) va a producir y consumir.
+`BetType` y `Selection` se importan de `app.domain.roulette` en vez de redeclararse
+aquí: el dominio (Fase 2) es quien posee el vocabulario de la ruleta, y esta capa de
+eventos lo reutiliza para que los 13 tipos de apuesta no vivan duplicados en dos
+sitios que podrían divergir. `app/domain/` sigue sin saber que `app/events/` existe —
+la dependencia va en un solo sentido.
 """
 
 from datetime import datetime
@@ -17,25 +18,10 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
-BetType = Literal[
-    "straight",
-    "split",
-    "street",
-    "corner",
-    "line",
-    "dozen",
-    "column",
-    "red",
-    "black",
-    "odd",
-    "even",
-    "high",
-    "low",
-]
+from app.domain.roulette.bets import Selection
+from app.domain.roulette.table import BetType
 
 Currency = Literal["EUR"]
-
-Selection = dict[str, int | list[int]]
 
 
 class EventEnvelope[TData: BaseModel](BaseModel):
