@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "wallet-transaction.v1.schema.json",
+  "title": "WalletTransactionEvent",
+  "description": "theclub.wallet.transactions.v1 — un evento por cada fila del ledger: depósito, stake de apuesta, payout de apuesta o ajuste.",
+  "allOf": [{ "$ref": "envelope.v1.schema.json" }],
+  "properties": {
+    "event_type": { "const": "wallet.transaction" },
+    "data": { "$ref": "#/$defs/WalletTransactionData" }
+  },
+  "$defs": {
+    "WalletTransactionData": {
+      "type": "object",
+      "required": [
+        "transaction_id",
+        "user_id",
+        "wallet_id",
+        "kind",
+        "amount_minor",
+        "balance_after_minor",
+        "currency",
+        "ref_type",
+        "ref_id"
+      ],
+      "properties": {
+        "transaction_id": { "type": "string", "format": "uuid" },
+        "user_id": { "type": "string", "format": "uuid" },
+        "wallet_id": { "type": "string", "format": "uuid" },
+        "kind": {
+          "type": "string",
+          "enum": ["deposit", "bet_stake", "bet_payout", "adjustment"]
+        },
+        "amount_minor": { "type": "integer" },
+        "balance_after_minor": { "type": "integer", "minimum": 0 },
+        "currency": { "type": "string", "const": "EUR" },
+        "ref_type": {
+          "type": ["string", "null"],
+          "enum": ["round", "bet", "manual", null]
+        },
+        "ref_id": {
+          "type": ["string", "null"],
+          "format": "uuid"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

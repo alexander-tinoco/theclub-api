@@ -1,0 +1,17 @@
+{
+  "event_id": "8f14e45f-ceea-4a9b-b0f8-3d9c4b9d1a11",
+  "event_type": "bet.placed",
+  "event_version": 1,
+  "occurred_at": "2026-08-16T21:04:12.331Z",
+  "producer": "theclub-api",
+  "idempotency_key": "6b2f0b0a-7c3d-4f2a-9c1a-9e6f7d2b5a10",
+  "data": {
+    "round_id": "3f2504e0-4f89-11d3-9a0c-0305e82c3301",
+    "bet_id": "3f2504e0-4f89-11d3-9a0c-0305e82c3302",
+    "user_id": "3f2504e0-4f89-11d3-9a0c-0305e82c3303",
+    "bet_type": "straight",
+    "selection": { "numbers": [17] },
+    "stake_minor": 500,
+    "currency": "EUR"
+  }
+}

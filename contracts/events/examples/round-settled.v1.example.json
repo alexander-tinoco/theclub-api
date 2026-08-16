@@ -1,0 +1,29 @@
+{
+  "event_id": "1b9d6bcd-bbfd-4b2d-9b5d-ab8dfbbd4bed",
+  "event_type": "round.settled",
+  "event_version": 1,
+  "occurred_at": "2026-08-16T21:04:12.402Z",
+  "producer": "theclub-api",
+  "idempotency_key": "6b2f0b0a-7c3d-4f2a-9c1a-9e6f7d2b5a10",
+  "data": {
+    "round_id": "3f2504e0-4f89-11d3-9a0c-0305e82c3301",
+    "user_id": "3f2504e0-4f89-11d3-9a0c-0305e82c3303",
+    "seed_pair_id": "c1a5a5a0-1234-4b2d-8b5d-ab8dfbbd4bee",
+    "nonce": 42,
+    "outcome": 17,
+    "bets": [
+      {
+        "bet_id": "3f2504e0-4f89-11d3-9a0c-0305e82c3302",
+        "bet_type": "straight",
+        "selection": { "numbers": [17] },
+        "stake_minor": 500,
+        "payout_minor": 17500,
+        "won": true
+      }
+    ],
+    "total_stake_minor": 500,
+    "total_payout_minor": 17500,
+    "net_minor": 17000,
+    "currency": "EUR"
+  }
+}

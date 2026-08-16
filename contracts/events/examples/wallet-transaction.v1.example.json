@@ -1,0 +1,19 @@
+{
+  "event_id": "e6efb2f8-4a3e-4d0a-9a2f-1e6a4a3b2c10",
+  "event_type": "wallet.transaction",
+  "event_version": 1,
+  "occurred_at": "2026-08-16T21:04:12.402Z",
+  "producer": "theclub-api",
+  "idempotency_key": "6b2f0b0a-7c3d-4f2a-9c1a-9e6f7d2b5a10",
+  "data": {
+    "transaction_id": "a2f8a2f8-1111-4d0a-9a2f-1e6a4a3b2c11",
+    "user_id": "3f2504e0-4f89-11d3-9a0c-0305e82c3303",
+    "wallet_id": "b3f8a2f8-2222-4d0a-9a2f-1e6a4a3b2c12",
+    "kind": "bet_payout",
+    "amount_minor": 17500,
+    "balance_after_minor": 42500,
+    "currency": "EUR",
+    "ref_type": "round",
+    "ref_id": "3f2504e0-4f89-11d3-9a0c-0305e82c3301"
+  }
+}

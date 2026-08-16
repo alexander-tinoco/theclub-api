@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "round-settled.v1.schema.json",
+  "title": "RoundSettledEvent",
+  "description": "theclub.rounds.settled.v1 — se publica cuando se resuelve una ronda: el resultado y cómo pagó cada apuesta.",
+  "allOf": [{ "$ref": "envelope.v1.schema.json" }],
+  "properties": {
+    "event_type": { "const": "round.settled" },
+    "data": { "$ref": "#/$defs/RoundSettledData" }
+  },
+  "$defs": {
+    "SettledBet": {
+      "type": "object",
+      "required": ["bet_id", "bet_type", "selection", "stake_minor", "payout_minor", "won"],
+      "properties": {
+        "bet_id": { "type": "string", "format": "uuid" },
+        "bet_type": {
+          "type": "string",
+          "enum": [
+            "straight", "split", "street", "corner", "line",
+            "dozen", "column", "red", "black", "odd", "even", "high", "low"
+          ]
+        },
+        "selection": { "type": "object" },
+        "stake_minor": { "type": "integer", "minimum": 1 },
+        "payout_minor": { "type": "integer", "minimum": 0 },
+        "won": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
+    "RoundSettledData": {
+      "type": "object",
+      "required": [
+        "round_id",
+        "user_id",
+        "seed_pair_id",
+        "nonce",
+        "outcome",
+        "bets",
+        "total_stake_minor",
+        "total_payout_minor",
+        "net_minor",
+        "currency"
+      ],
+      "properties": {
+        "round_id": { "type": "string", "format": "uuid" },
+        "user_id": { "type": "string", "format": "uuid" },
+        "seed_pair_id": { "type": "string", "format": "uuid" },
+        "nonce": { "type": "integer", "minimum": 0 },
+        "outcome": { "type": "integer", "minimum": 0, "maximum": 36 },
+        "bets": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/SettledBet" }
+        },
+        "total_stake_minor": { "type": "integer", "minimum": 1 },
+        "total_payout_minor": { "type": "integer", "minimum": 0 },
+        "net_minor": { "type": "integer" },
+        "currency": { "type": "string", "const": "EUR" }
+      },
+      "additionalProperties": false
+    }
+  }
+}
