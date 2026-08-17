@@ -38,8 +38,8 @@ class RefreshTokenRepository:
         )
 
     async def revoke_family(self, family_id: uuid.UUID, *, revoked_at: datetime) -> None:
-        """Revoca toda la cadena de rotaciones de una sesión — el remedio ante
-        un reuso detectado (posible robo del refresh token)."""
+        """Revokes an entire session's rotation chain — the remedy for a
+        detected reuse (possible refresh token theft)."""
         await self._session.execute(
             update(RefreshToken)
             .where(RefreshToken.family_id == family_id, RefreshToken.revoked_at.is_(None))

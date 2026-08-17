@@ -8,10 +8,11 @@ from app.models.base import Base
 
 
 class SeedPair(Base):
-    """Provably fair. `server_seed` solo se lee tras el reveal; hasta entonces
-    solo `server_seed_hash` es público. El índice único parcial garantiza, a
-    nivel de base de datos, que un usuario nunca tenga dos pares activos a la
-    vez — sin que la app tenga que bloquear nada para sostener ese invariante.
+    """Provably fair. `server_seed` is only read after the reveal; until
+    then only `server_seed_hash` is public. The partial unique index
+    guarantees, at the database level, that a user never has two active
+    pairs at once — without the app having to lock anything to hold that
+    invariant.
     """
 
     __tablename__ = "seed_pairs"

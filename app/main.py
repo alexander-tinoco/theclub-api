@@ -1,4 +1,4 @@
-"""Ensamblado de la aplicación FastAPI."""
+"""FastAPI application assembly."""
 
 import asyncio
 import contextlib
@@ -43,19 +43,19 @@ async def _check_database(engine: AsyncEngine) -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """Arranque y apagado de recursos de larga vida.
+    """Startup and shutdown of long-lived resources.
 
-    A diferencia del engine de Postgres, el productor de Kafka *no* se puede
-    construir en `create_app()`: `AIOKafkaProducer` exige un event loop
-    corriendo incluso para instanciarse, no solo para conectar — así que
-    tanto su creación como el `start()` viven aquí, junto con el registro del
-    check `"kafka"` (a diferencia de `"database"`, que sí se registra en
-    `create_app()`). Un test que no arranca el lifespan simplemente no ve
-    `"kafka"` en `/ready` — igual que antes de que esta fase existiera.
+    Unlike the Postgres engine, the Kafka producer *can't* be built in
+    `create_app()`: `AIOKafkaProducer` requires a running event loop just
+    to be instantiated, not only to connect — so both its creation and its
+    `start()` live here, along with registering the `"kafka"` check (unlike
+    `"database"`, which does get registered in `create_app()`). A test that
+    doesn't start the lifespan simply doesn't see `"kafka"` in `/ready` —
+    same as before this phase existed.
     """
     settings: Settings = app.state.settings
     logger.info(
-        "Arrancando %s v%s (env=%s)", settings.APP_NAME, settings.APP_VERSION, settings.APP_ENV
+        "Starting %s v%s (env=%s)", settings.APP_NAME, settings.APP_VERSION, settings.APP_ENV
     )
 
     producer = create_producer(settings)
@@ -68,9 +68,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     yield
 
-    # Avisar a los clientes WS antes de tirar el resto de la infraestructura:
-    # sus handlers no dependen de Postgres/Kafka en su propio cierre, pero
-    # "decirles que nos vamos" antes es el orden que tiene sentido igual.
+    # Notify WS clients before tearing down the rest of the
+    # infrastructure: their handlers don't depend on Postgres/Kafka for
+    # their own shutdown, but "telling them we're leaving" first is still
+    # the order that makes sense.
     await app.state.ws_connections.close_all()
 
     for task in (relay_task, purge_task):
@@ -81,7 +82,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     await app.state.redis.aclose()
     await app.state.db_engine.dispose()
-    logger.info("Apagando %s", settings.APP_NAME)
+    logger.info("Shutting down %s", settings.APP_NAME)
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -92,23 +93,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         title=settings.APP_NAME,
         version=settings.APP_VERSION,
         lifespan=lifespan,
-        # La documentación interactiva no se publica en staging/prod.
+        # Interactive docs aren't published in staging/prod.
         docs_url=None if settings.is_production else "/docs",
         redoc_url=None,
         openapi_url=None if settings.is_production else "/openapi.json",
     )
 
     app.state.settings = settings
-    # readiness, engine y session_factory se crean aquí y no en el lifespan:
-    # así los tests que no lo arrancan siguen teniendo un estado válido.
+    # readiness, engine, and session_factory are created here, not in the
+    # lifespan: that way tests that don't start it still get valid state.
     app.state.readiness = ReadinessRegistry()
     engine = create_engine(settings.DATABASE_URL, pool_size=settings.DB_POOL_SIZE)
     app.state.db_engine = engine
     app.state.db_session_factory = create_session_factory(engine)
     app.state.readiness.register("database", lambda: _check_database(engine))
 
-    # Igual que readiness/engine: puros, sin IO, así que viven aquí y no en
-    # el lifespan — los tests que no lo arrancan también los necesitan.
+    # Same as readiness/engine: pure, no IO, so they live here and not in
+    # the lifespan — tests that don't start it need them too.
     redis_client = create_redis_client(settings)
     app.state.redis = redis_client
     app.state.readiness.register("redis", lambda: check_redis(redis_client))
@@ -123,35 +124,35 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
 
     app.state.limiter = limiter
-    # slowapi tipa su handler específicamente para RateLimitExceeded, no para
-    # el Exception genérico que espera Starlette — desajuste de varianza
-    # conocido entre las dos librerías, no un error real.
+    # slowapi types its handler specifically for RateLimitExceeded, not for
+    # the generic Exception Starlette expects — a known variance mismatch
+    # between the two libraries, not a real error.
     app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)  # type: ignore[arg-type]
 
-    # Orden importa, y es contraintuitivo: `Starlette.add_middleware` inserta
-    # cada middleware nuevo al *principio* de su lista interna
-    # (`user_middleware.insert(0, ...)`), así que el *último* que se agrega
-    # aquí termina siendo el *más externo* en tiempo de ejecución (ve la
-    # petición primero, la respuesta al final) — lo comprobamos con un
-    # script antes de confiar en esto, porque la lectura ingenua ("el
-    # primero que agrego es el que ve todo primero") es al revés.
+    # Order matters, and it's counterintuitive: `Starlette.add_middleware`
+    # inserts every new middleware at the *start* of its internal list
+    # (`user_middleware.insert(0, ...)`), so the *last* one added here ends
+    # up being the *outermost* at runtime (sees the request first, the
+    # response last) — verified with a throwaway script before trusting
+    # this, because the naive reading ("the first one I add is the first
+    # to see everything") is backwards.
     #
-    # De más interno a más externo:
-    #   UnhandledExceptionMiddleware — pegado al router; si algo revienta
-    #     sin estar mapeado, genera la respuesta *antes* de salir de CORS,
-    #     para que sí lleve sus headers (Starlette manda los handlers de
-    #     `Exception`/500 registrados vía `add_exception_handler` a
-    #     `ServerErrorMiddleware`, la capa más externa de todas — por fuera
-    #     de CORS y de RequestContext; de ahí que esto sea middleware, no
-    #     un exception handler más).
-    #   SlowAPIMiddleware, CORSMiddleware, MaxBodySizeMiddleware — cada uno
-    #     puede cortar la petición con su propia respuesta (429, CORS
-    #     inválido, 413).
-    #   RequestContextMiddleware — el más externo: mide la duración total
-    #     real y ve el código de estado final sin importar en qué capa se
-    #     generó la respuesta, así que su línea canónica y el header
-    #     `X-Request-ID` cubren *toda* petición, incluida una rechazada por
-    #     cualquiera de las capas de abajo.
+    # From innermost to outermost:
+    #   UnhandledExceptionMiddleware — right next to the router; if
+    #     something unmapped blows up, it generates the response *before*
+    #     exiting CORS, so it does carry its headers (Starlette routes
+    #     handlers registered for `Exception`/500 via
+    #     `add_exception_handler` to `ServerErrorMiddleware`, the outermost
+    #     layer of all — outside CORS and RequestContext; that's why this
+    #     is middleware, not just another exception handler).
+    #   SlowAPIMiddleware, CORSMiddleware, MaxBodySizeMiddleware — each can
+    #     cut the request short with its own response (429, invalid CORS,
+    #     413).
+    #   RequestContextMiddleware — the outermost: measures the real total
+    #     duration and sees the final status code no matter which layer
+    #     generated the response, so its canonical line and the
+    #     `X-Request-ID` header cover *every* request, including one
+    #     rejected by any of the layers below.
     app.add_middleware(UnhandledExceptionMiddleware)
     app.add_middleware(SlowAPIMiddleware)
 
@@ -159,8 +160,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         CORSMiddleware,
         allow_origins=settings.CORS_ORIGINS,
         allow_credentials=True,
-        # Restringido a lo que la API realmente usa — nunca hubo un motivo
-        # real para el comodín, ninguna ruta acepta otros métodos/headers.
+        # Restricted to what the API actually uses — there was never a real
+        # reason for the wildcard, no route accepts other methods/headers.
         allow_methods=["GET", "POST"],
         allow_headers=["Authorization", "Content-Type", "Idempotency-Key"],
     )

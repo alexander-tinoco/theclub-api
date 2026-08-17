@@ -1,4 +1,4 @@
-"""Acceso a datos de rounds y bets — el historial de partidas."""
+"""Data access for rounds and bets — the game history."""
 
 import uuid
 from datetime import UTC, datetime
@@ -32,8 +32,8 @@ class RoundRepository:
         outcome: int,
         bets: list[ResolvedBetInput],
     ) -> tuple[Round, list[Bet]]:
-        """Crea la ronda ya resuelta — en este juego no hay estado intermedio:
-        se gira y se resuelve en la misma petición."""
+        """Creates the round already settled — this game has no intermediate
+        state: it spins and resolves within the same request."""
         now = datetime.now(UTC)
         round_ = Round(
             user_id=user_id,

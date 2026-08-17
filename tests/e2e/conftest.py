@@ -1,8 +1,8 @@
-"""Fixtures del recorrido de punta a punta: igual que `tests/integration/`
-(Postgres, Redis y Redpanda reales vía `make up`), duplicadas aquí en vez de
-compartidas — `pytest_plugins` en un `conftest.py` que no es el de la raíz
-está prohibido desde pytest 5, y promover estas fixtures a la raíz las
-pondría también, sin necesitarlo, delante de cada test unitario.
+"""Fixtures for the end-to-end run: same as `tests/integration/` (real
+Postgres, Redis, and Redpanda via `make up`), duplicated here instead of
+shared — `pytest_plugins` in a `conftest.py` that isn't the root one has
+been forbidden since pytest 5, and promoting these fixtures to the root
+would also put them, unnecessarily, in front of every unit test.
 """
 
 from collections.abc import AsyncIterator

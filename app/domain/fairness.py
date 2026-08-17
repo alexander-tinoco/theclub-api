@@ -1,7 +1,7 @@
-"""Provably fair: commit-reveal + derivación determinista del resultado.
+"""Provably fair: commit-reveal + deterministic derivation of the outcome.
 
-Genérico a propósito — este módulo no sabe qué es la ruleta. `roulette/engine.py`
-es quien le pide un número módulo 37.
+Generic on purpose — this module doesn't know what roulette is.
+`roulette/engine.py` is the one that asks it for a number modulo 37.
 """
 
 import hashlib
@@ -16,7 +16,7 @@ _CHUNK_SPACE = 2**32
 
 @dataclass(frozen=True, slots=True)
 class SeedMaterial:
-    """Lo mínimo necesario para reproducir un resultado."""
+    """The minimum needed to reproduce an outcome."""
 
     server_seed: bytes
     client_seed: str
@@ -24,12 +24,12 @@ class SeedMaterial:
 
 
 def new_server_seed() -> bytes:
-    """32 bytes criptográficamente aleatorios. Se guardan; solo su hash se publica."""
+    """32 cryptographically random bytes. Stored; only its hash is published."""
     return secrets.token_bytes(SEED_BYTES)
 
 
 def hash_seed(server_seed: bytes) -> str:
-    """Lo único que se muestra al jugador antes de girar."""
+    """The only thing shown to the player before spinning."""
     return hashlib.sha256(server_seed).hexdigest()
 
 
@@ -40,11 +40,12 @@ def _message(client_seed: str, nonce: int, round_index: int) -> bytes:
 
 
 def _uniform_below(digest: bytes, modulus: int) -> int | None:
-    """Busca en `digest`, de 4 en 4 bytes, un valor sin sesgo bajo `modulus`.
+    """Scans `digest`, 4 bytes at a time, for an unbiased value under `modulus`.
 
-    Un bloque se acepta solo si cae por debajo del mayor múltiplo de `modulus`
-    que no supera 2**32 — así ningún resto queda sobrerrepresentado. Devuelve
-    None si ningún bloque del digest sirvió (ver `derive_outcome`).
+    A block is only accepted if it falls below the largest multiple of
+    `modulus` that doesn't exceed 2**32 — that way no remainder ends up
+    overrepresented. Returns None if no block in the digest worked (see
+    `derive_outcome`).
     """
     limit = (_CHUNK_SPACE // modulus) * modulus
     for offset in range(0, len(digest) - _CHUNK_SIZE + 1, _CHUNK_SIZE):
@@ -55,13 +56,13 @@ def _uniform_below(digest: bytes, modulus: int) -> int | None:
 
 
 def derive_outcome(seed: SeedMaterial, *, modulus: int) -> int:
-    """HMAC-SHA256 + rejection sampling: un entero en [0, modulus) sin sesgo.
+    """HMAC-SHA256 + rejection sampling: an unbiased integer in [0, modulus).
 
-    Determinista: la misma `SeedMaterial` siempre produce el mismo resultado,
-    así cualquiera puede verificarlo tras el reveal del server_seed. Para
-    modulus=37 la probabilidad de rechazar los 8 bloques de un mismo HMAC es
-    indistinguible de cero, pero por rigor el bucle sigue pidiendo HMACs
-    adicionales en vez de sesgar el resultado como último recurso.
+    Deterministic: the same `SeedMaterial` always produces the same
+    outcome, so anyone can verify it after the server_seed reveal. For
+    modulus=37 the odds of rejecting all 8 blocks of a single HMAC are
+    indistinguishable from zero, but for rigor the loop keeps requesting
+    additional HMACs instead of biasing the outcome as a last resort.
     """
     round_index = 0
     while True:

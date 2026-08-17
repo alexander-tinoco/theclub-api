@@ -8,10 +8,10 @@ from app.models.base import Base
 
 
 class RefreshToken(Base):
-    """Sesión de refresh, no JWT: solo se guarda el hash del token real (ver
-    `app/infra/security.py`). `family_id` agrupa toda la cadena de rotaciones
-    de un login — al detectar un reuso se revoca la familia entera, no solo
-    la fila.
+    """Refresh session, not a JWT: only the real token's hash is stored (see
+    `app/infra/security.py`). `family_id` groups an entire rotation chain
+    from one login — detecting a reuse revokes the whole family, not just
+    the row.
     """
 
     __tablename__ = "refresh_tokens"

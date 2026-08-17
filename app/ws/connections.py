@@ -1,7 +1,7 @@
-"""Registro de conexiones WS activas: para el límite global de conexiones y
-para poder cerrarlas todas de forma ordenada cuando la app se apaga — sin
-esto, un `docker compose down` simplemente corta el TCP sin avisar al
-cliente.
+"""Registry of active WS connections: for the global connection limit and
+to be able to close them all cleanly when the app shuts down — without
+this, a `docker compose down` would just cut the TCP connection with no
+warning to the client.
 """
 
 import contextlib
@@ -30,9 +30,9 @@ class ConnectionRegistry:
             ws_connections_active.dec()
 
     async def close_all(self, *, code: int = 1001) -> None:
-        """Manda el frame de cierre a cada conexión activa. No espera a que
-        el handler de cada una termine de desenrollarse del lado del
-        servidor — eso lo resuelve cada `/ws` al notar la desconexión.
+        """Sends the close frame to every active connection. Doesn't wait
+        for each one's handler to finish unwinding on the server side —
+        that's resolved by each `/ws` when it notices the disconnect.
         """
         connections = list(self._connections)
         self._connections.clear()

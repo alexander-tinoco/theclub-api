@@ -1,9 +1,9 @@
-"""El caso de uso central: colocar una o más apuestas y resolver la ronda.
+"""The central use case: place one or more bets and resolve the round.
 
-Orden deliberado: validar forma y límites (sin tocar dinero) → debitar el
-stake completo, gane o pierda → girar → resolver → acreditar si corresponde
-→ persistir → encolar eventos. Cada paso que mueve dinero es una sola
-sentencia atómica (ver `WalletRepository`); nada de leer-calcular-escribir.
+Deliberate order: validate shape and limits (without touching money) →
+debit the full stake, win or lose → spin → resolve → credit if applicable
+→ persist → enqueue events. Every step that moves money is a single atomic
+statement (see `WalletRepository`); no read-compute-write anywhere.
 """
 
 import uuid
@@ -31,7 +31,7 @@ from app.services.exceptions import DataIntegrityError
 
 @dataclass(frozen=True, slots=True)
 class BetRequest:
-    """Entrada de una apuesta, ya desacoplada de Pydantic/HTTP."""
+    """A bet's input, already decoupled from Pydantic/HTTP."""
 
     bet_type: BetType
     selection: Selection
@@ -80,8 +80,8 @@ class PlaceBetResult:
 
 @dataclass(frozen=True, slots=True)
 class _RoundContext:
-    """Todo lo que `_enqueue_round_events` necesita, calculado una sola vez en
-    `place_bet` — evita pasar quince parámetros sueltos entre las dos funciones."""
+    """Everything `_enqueue_round_events` needs, computed once in
+    `place_bet` — avoids passing fifteen loose parameters between the two functions."""
 
     user_id: uuid.UUID
     wallet_id: uuid.UUID
@@ -124,14 +124,14 @@ async def place_bet(
     wallets = WalletRepository(session)
     wallet = await wallets.get_by_user_id(user_id)
     if wallet is None:
-        raise DataIntegrityError(f"user {user_id} sin wallet")
+        raise DataIntegrityError(f"user {user_id} has no wallet")
 
     balance_after_stake = await wallets.debit(wallet.id, Money(total_stake))
 
     seed_pairs = SeedPairRepository(session)
     seed_pair = await seed_pairs.get_active_by_user_id(user_id)
     if seed_pair is None:
-        raise DataIntegrityError(f"user {user_id} sin seed pair activo")
+        raise DataIntegrityError(f"user {user_id} has no active seed pair")
 
     nonce = await seed_pairs.consume_nonce(seed_pair.id)
     seed_material = SeedMaterial(
@@ -176,11 +176,11 @@ async def place_bet(
     )
     payout_entry = None
     if total_payout > 0:
-        # Narrowing local, no de un dato externo: si total_payout > 0, la
-        # rama de arriba ya fijó balance_after_payout tres líneas antes — es
-        # un invariante del propio flujo de esta función, no de la base de
-        # datos, así que un `assert` (a diferencia de wallet/seed_pair) es
-        # apropiado aquí.
+        # Local narrowing, not an external fact: if total_payout > 0, the
+        # branch above already set balance_after_payout three lines earlier
+        # — it's an invariant of this function's own flow, not of the
+        # database, so an `assert` (unlike wallet/seed_pair) is appropriate
+        # here.
         assert balance_after_payout is not None
         payout_entry = await ledger.append(
             wallet_id=wallet.id,
@@ -299,8 +299,8 @@ async def _enqueue_round_events(
     await enqueue_event(session, settings, stake_tx_envelope, key=str(ctx.user_id))
 
     if ctx.payout_entry_id is not None:
-        # Mismo razonamiento que el assert de arriba en place_bet: narrowing
-        # local, payout_entry_id y balance_after_payout se fijan juntos.
+        # Same reasoning as the assert above in place_bet: local narrowing,
+        # payout_entry_id and balance_after_payout are set together.
         assert ctx.balance_after_payout is not None
         payout_tx_envelope = new_envelope(
             "wallet.transaction",

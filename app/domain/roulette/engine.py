@@ -1,4 +1,4 @@
-"""Punto de entrada del juego: girar y resolver las apuestas de una ronda."""
+"""The game's entry point: spin and resolve a round's bets."""
 
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -17,16 +17,16 @@ class ResolvedBet:
 
 
 def spin(seed: SeedMaterial) -> int:
-    """Deriva el resultado (0-36) de forma determinista y verificable."""
+    """Derives the outcome (0-36) deterministically and verifiably."""
     return derive_outcome(seed, modulus=POCKET_COUNT)
 
 
 def resolve_bets(bets: Sequence[PlacedBet], outcome: int) -> list[ResolvedBet]:
-    """Por cada apuesta: ¿ganó? y ¿cuánto se le acredita si ganó?
+    """For each bet: did it win? and how much gets credited if it did?
 
-    El payout incluye la devolución del stake: paga `stake * (ratio + 1)`, no
-    `stake * ratio` — el stake ya se debitó por adelantado (Fase 5), así que
-    "paga 35 a 1" solo es cierto si el crédito devuelve también la apuesta.
+    The payout includes the stake's return: it pays `stake * (ratio + 1)`,
+    not `stake * ratio` — the stake was already debited upfront (Phase 5),
+    so "pays 35 to 1" is only true if the credit also returns the bet.
     """
     resolved = []
     for bet in bets:

@@ -1,8 +1,8 @@
-"""Acceso a datos de idempotency_keys.
+"""Data access for idempotency_keys.
 
-`create_pending` es el mecanismo real: la UNIQUE(user_id, key) de la tabla es
-quien decide, a nivel de Postgres, cuál de dos peticiones simultáneas con la
-misma clave gana la reserva — ver `app/services/idempotency.py`.
+`create_pending` is the real mechanism: the table's UNIQUE(user_id, key) is
+what decides, at the Postgres level, which of two simultaneous requests with
+the same key wins the reservation — see `app/services/idempotency.py`.
 """
 
 import uuid

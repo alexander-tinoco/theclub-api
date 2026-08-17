@@ -1,4 +1,4 @@
-"""Dependencias compartidas de la capa API."""
+"""Shared dependencies for the API layer."""
 
 from collections.abc import AsyncIterator
 from typing import Annotated
@@ -17,11 +17,11 @@ from app.ws.broadcaster import Broadcaster
 
 
 def get_app_settings(request: Request) -> Settings:
-    """Settings de *esta* aplicación.
+    """*This* application's settings.
 
-    Se leen de `app.state` y no del caché global de `get_settings()` para que
-    una app creada con settings explícitos (los tests, sobre todo) se comporte
-    exactamente como está configurada.
+    Read from `app.state` and not from `get_settings()`'s global cache so
+    an app created with explicit settings (tests, mainly) behaves exactly
+    as configured.
     """
     settings: Settings = request.app.state.settings
     return settings
@@ -31,8 +31,8 @@ SettingsDep = Annotated[Settings, Depends(get_app_settings)]
 
 
 async def get_session(request: Request) -> AsyncIterator[AsyncSession]:
-    """Una sesión por petición, envuelta en `unit_of_work`: commit si el
-    handler termina bien, rollback si levanta cualquier excepción.
+    """One session per request, wrapped in `unit_of_work`: commits if the
+    handler finishes cleanly, rolls back if any exception is raised.
     """
     async with unit_of_work(request.app.state.db_session_factory) as session:
         yield session
@@ -42,9 +42,9 @@ SessionDep = Annotated[AsyncSession, Depends(get_session)]
 
 
 def get_session_factory(request: Request) -> async_sessionmaker[AsyncSession]:
-    """La fábrica de sesiones en sí, no una sesión ya abierta — la necesitan
-    los endpoints que pasan por `run_idempotent` (place_bet, deposit), que
-    abren varias transacciones independientes dentro de la misma petición.
+    """The session factory itself, not an already-open session — needed by
+    endpoints that go through `run_idempotent` (place_bet, deposit), which
+    open several independent transactions within the same request.
     """
     factory: async_sessionmaker[AsyncSession] = request.app.state.db_session_factory
     return factory
@@ -54,11 +54,11 @@ SessionFactoryDep = Annotated[async_sessionmaker[AsyncSession], Depends(get_sess
 
 
 async def get_current_user(request: Request, session: SessionDep, settings: SettingsDep) -> User:
-    """Usuario autenticado a partir del header `Authorization: Bearer <jwt>`.
+    """Authenticated user from the `Authorization: Bearer <jwt>` header.
 
-    Se recarga desde la base en cada petición (no basta con confiar en el
-    `sub` del JWT) para que un usuario suspendido *después* de emitido el
-    token deje de poder usarlo antes de que caduque.
+    Reloaded from the database on every request (trusting the JWT's `sub`
+    alone isn't enough) so a user suspended *after* the token was issued
+    loses access before it expires.
     """
     auth_header = request.headers.get("Authorization")
     if not auth_header or not auth_header.startswith("Bearer "):
@@ -78,12 +78,13 @@ async def get_current_user(request: Request, session: SessionDep, settings: Sett
     if user.status == "suspended":
         raise UserSuspendedError
     user_id_var.set(str(user.id))
-    # `bind_canonical` además de `user_id_var`, no en vez de: `SlowAPIMiddleware`
-    # hereda de `BaseHTTPMiddleware`, que corre el resto de la petición en una
-    # tarea aparte — un `ContextVar.set()' ahí adentro nunca lo ve
-    # `RequestContextMiddleware` (por fuera de esa tarea) al armar la línea
-    # canónica, pero mutar el dict de `bind_canonical` sí, porque ese dict es
-    # el mismo objeto compartido, no una reasignación de contextvar.
+    # `bind_canonical` in addition to `user_id_var`, not instead of it:
+    # `SlowAPIMiddleware` inherits from `BaseHTTPMiddleware`, which runs the
+    # rest of the request in a separate task — a `ContextVar.set()` in
+    # there is never seen by `RequestContextMiddleware` (outside that task)
+    # when building the canonical line, but mutating `bind_canonical`'s
+    # dict is, because that dict is the same shared object, not a
+    # contextvar reassignment.
     bind_canonical(user_id=str(user.id))
     return user
 

@@ -37,12 +37,12 @@ class RefreshRequest(BaseModel):
 class TokenResponse(BaseModel):
     access_token: str
     refresh_token: str
-    token_type: Literal["bearer"] = "bearer"  # noqa: S105 -- tipo de token OAuth2, no un secreto
+    token_type: Literal["bearer"] = "bearer"  # noqa: S105 -- OAuth2 token type, not a secret
 
 
 class UserResponse(BaseModel):
-    """Nunca lleva `password_hash`: el campo ni siquiera existe en este modelo,
-    así que no hay forma de que se filtre por descuido al serializar.
+    """Never carries `password_hash`: the field doesn't even exist on this
+    model, so there's no way it leaks by accident when serializing.
     """
 
     id: UUID

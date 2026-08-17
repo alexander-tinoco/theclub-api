@@ -1,8 +1,9 @@
-"""La tabla `outbox` acumula una fila por evento publicado y el relay nunca
-las borra — sin este mecanismo aparte crecería sin límite aunque Kafka jamás
-falle. `purge_once`/`purge_loop` son el equivalente de limpieza a
-`relay_once`/`relay_loop`: mismo patrón de "un ciclo que falla no mata la
-tarea de fondo", pero sobre borrado en vez de publicación.
+"""The `outbox` table accumulates one row per published event and the
+relay never deletes them — without this separate mechanism it would grow
+without bound even if Kafka never fails. `purge_once`/`purge_loop` are the
+cleanup equivalent of `relay_once`/`relay_loop`: same "a cycle that fails
+doesn't kill the background task" pattern, but for deletion instead of
+publishing.
 """
 
 import asyncio
@@ -31,7 +32,7 @@ def _row(*, published_at: datetime | None) -> OutboxEvent:
     )
 
 
-async def test_purge_once_borra_solo_lo_publicado_hace_mas_de_retention(
+async def test_purge_once_only_deletes_rows_published_more_than_retention_ago(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
@@ -52,7 +53,7 @@ async def test_purge_once_borra_solo_lo_publicado_hace_mas_de_retention(
     assert never_published.id in remaining_ids
 
 
-async def test_purge_once_no_hace_nada_si_no_hay_filas_vencidas(
+async def test_purge_once_does_nothing_if_no_rows_are_past_retention(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
@@ -63,7 +64,7 @@ async def test_purge_once_no_hace_nada_si_no_hay_filas_vencidas(
     assert deleted == 0
 
 
-async def test_purge_loop_no_muere_si_un_ciclo_falla_por_completo(
+async def test_purge_loop_does_not_die_if_a_cycle_fails_entirely(
     monkeypatch: pytest.MonkeyPatch,
     integration_settings: Settings,
 ) -> None:
@@ -72,14 +73,14 @@ async def test_purge_loop_no_muere_si_un_ciclo_falla_por_completo(
     async def _broken_purge_once(*args: object, **kwargs: object) -> int:
         nonlocal calls
         calls += 1
-        raise RuntimeError("fallo de ciclo completo, no de una fila")
+        raise RuntimeError("full-cycle failure, not a single-row one")
 
     monkeypatch.setattr(outbox_cleanup_module, "purge_once", _broken_purge_once)
     settings = integration_settings.model_copy(update={"OUTBOX_CLEANUP_INTERVAL_S": 60})
 
     task = asyncio.create_task(purge_loop(AsyncMock(), settings))
     await asyncio.sleep(0.1)
-    assert not task.done(), "el loop no debe morir por un ciclo que falla por completo"
+    assert not task.done(), "the loop must not die from a cycle that fails entirely"
     assert calls == 1
 
     task.cancel()

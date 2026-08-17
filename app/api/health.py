@@ -1,12 +1,13 @@
-"""Liveness y readiness.
+"""Liveness and readiness.
 
-Son dos cosas distintas y conviene no mezclarlas:
+These are two different things, and it pays not to mix them up:
 
-- `/health` (liveness) no toca ninguna dependencia. Si responde, el proceso
-  está vivo. Es lo que mira Docker para decidir si reiniciar el contenedor.
-- `/ready` (readiness) ejecuta los checks registrados y devuelve 503 si alguno
-  falla. En la Fase 0 el registro está vacío; la Fase 3 añade Postgres y la
-  Fase 6 añade Kafka **sin tocar este archivo**.
+- `/health` (liveness) touches no dependency at all. If it responds, the
+  process is alive. This is what Docker watches to decide whether to
+  restart the container.
+- `/ready` (readiness) runs the registered checks and returns 503 if any
+  fail. In Phase 0 the registry is empty; Phase 3 adds Postgres and Phase 6
+  adds Kafka **without touching this file**.
 """
 
 import asyncio
@@ -22,20 +23,20 @@ from app.infra.metrics import render_latest
 
 logger = logging.getLogger(__name__)
 
-#: Un check falla lanzando una excepción; no devuelve nada.
+#: A check fails by raising an exception; it returns nothing.
 ReadinessCheck = Callable[[], Awaitable[None]]
 
-#: Una dependencia colgada no debe colgar `/ready`.
+#: A hung dependency must not hang `/ready`.
 CHECK_TIMEOUT_SECONDS = 2.0
 
 router = APIRouter(tags=["health"])
 
 
 class ReadinessRegistry:
-    """Checks de readiness que las fases posteriores van registrando.
+    """Readiness checks that later phases register incrementally.
 
-    Vive en `app.state.readiness`, no como global de módulo, para que cada
-    aplicación creada en un test tenga el suyo.
+    Lives on `app.state.readiness`, not as a module global, so each
+    application created in a test gets its own.
     """
 
     def __init__(self) -> None:
@@ -43,11 +44,11 @@ class ReadinessRegistry:
 
     def register(self, name: str, check: ReadinessCheck) -> None:
         if name in self._checks:
-            raise ValueError(f"Ya hay un check de readiness registrado como {name!r}")
+            raise ValueError(f"A readiness check is already registered as {name!r}")
         self._checks[name] = check
 
     async def run(self) -> dict[str, str]:
-        """Ejecuta todos los checks en paralelo. Devuelve nombre → estado."""
+        """Runs every check in parallel. Returns name -> status."""
         if not self._checks:
             return {}
         names = list(self._checks)
@@ -59,10 +60,10 @@ class ReadinessRegistry:
         try:
             await asyncio.wait_for(check(), timeout=CHECK_TIMEOUT_SECONDS)
         except TimeoutError:
-            logger.warning("Check de readiness %r agotó el tiempo de espera", name)
+            logger.warning("Readiness check %r timed out", name)
             return "timeout"
         except Exception:
-            logger.warning("Check de readiness %r falló", name, exc_info=True)
+            logger.warning("Readiness check %r failed", name, exc_info=True)
             return "fail"
         return "ok"
 
@@ -93,7 +94,7 @@ async def health(settings: SettingsDep) -> HealthResponse:
     "/ready",
     response_model=ReadyResponse,
     summary="Readiness",
-    responses={503: {"model": ReadyResponse, "description": "Alguna dependencia no responde"}},
+    responses={503: {"model": ReadyResponse, "description": "Some dependency isn't responding"}},
 )
 async def ready(request: Request, response: Response) -> ReadyResponse:
     registry: ReadinessRegistry = request.app.state.readiness
@@ -103,11 +104,12 @@ async def ready(request: Request, response: Response) -> ReadyResponse:
     return ReadyResponse(status="ready" if healthy else "degraded", checks=checks)
 
 
-@router.get("/metrics", summary="Métricas Prometheus")
+@router.get("/metrics", summary="Prometheus metrics")
 async def metrics() -> Response:
-    """Sin autenticación: en un despliegue real esto se restringe a nivel de
-    red (no expuesto a internet, solo al scraper de Prometheus), no con un
-    token de aplicación — es la convención estándar para este endpoint.
+    """No authentication: in a real deployment this is restricted at the
+    network level (not exposed to the internet, only to Prometheus's
+    scraper), not with an application token — that's the standard
+    convention for this endpoint.
     """
     body, content_type = render_latest()
     return Response(content=body, media_type=content_type)

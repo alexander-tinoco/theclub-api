@@ -1,8 +1,8 @@
-"""Los eventos que `place_bet`/`deposit` escriben de verdad en el outbox deben
-cumplir el mismo JSON Schema que `contracts/events/` define — no basta con
-confiar en que Pydantic ya lo garantiza. La Fase 1 solo probó ejemplos
-estáticos contra el schema; esto toma una fila real, escrita por el flujo
-completo de la Fase 5, y la valida.
+"""The events `place_bet`/`deposit` actually write to the outbox must
+satisfy the same JSON Schema that `contracts/events/` defines — it's not
+enough to trust that Pydantic already guarantees it. Phase 1 only tested
+static examples against the schema; this takes a real row, written by
+Phase 5's full flow, and validates it.
 """
 
 import json
@@ -67,12 +67,12 @@ async def client(integration_settings: Settings) -> Any:
             yield c
 
 
-async def test_los_eventos_reales_del_outbox_cumplen_el_json_schema(
+async def test_real_outbox_events_satisfy_the_json_schema(
     client: AsyncClient, db_session: AsyncSession, registry: Registry
 ) -> None:
     email = f"{uuid.uuid4()}@example.com"
     register = await client.post(
-        "/api/v1/auth/register", json={"email": email, "password": "contraseña-larga"}
+        "/api/v1/auth/register", json={"email": email, "password": "a-long-password"}
     )
     headers = {"Authorization": f"Bearer {register.json()['access_token']}"}
     await client.post(
@@ -90,7 +90,7 @@ async def test_los_eventos_reales_del_outbox_cumplen_el_json_schema(
 
     rows = (await db_session.execute(select(OutboxEvent))).scalars().all()
     event_types = {row.payload["event_type"] for row in rows}
-    # deposit -> wallet.transaction; apostar -> bet.placed + round.settled + wallet.transaction
+    # deposit -> wallet.transaction; betting -> bet.placed + round.settled + wallet.transaction
     assert event_types == {"bet.placed", "round.settled", "wallet.transaction"}
 
     for row in rows:

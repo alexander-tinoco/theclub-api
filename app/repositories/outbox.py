@@ -1,7 +1,7 @@
-"""Acceso a datos del outbox para el relay (Fase 6). El repositorio de
-escritura (`enqueue_event`, en `app/events/outbox.py`) es distinto a
-propósito: ese lo usa cualquier caso de uso que mueva negocio; este lo usa
-solo el relay, que es quien lee, publica y marca.
+"""Data access to the outbox for the relay (Phase 6). The write-side
+repository (`enqueue_event`, in `app/events/outbox.py`) is deliberately
+separate: that one is used by any use case that moves business state; this
+one is used only by the relay, which reads, publishes, and marks.
 """
 
 import uuid
@@ -13,9 +13,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.outbox import OutboxEvent
 
-#: Backoff exponencial con tope: 2, 4, 8... hasta 60s. Evita que una fila que
-#: falla se reintente en cada poll (cada 500ms por defecto) mientras Kafka
-#: esté caído, sin dejar de reintentar indefinidamente.
+#: Capped exponential backoff: 2, 4, 8... up to 60s. Stops a failing row
+#: from being retried on every poll (every 500ms by default) while Kafka is
+#: down, without ever giving up retrying.
 BASE_BACKOFF_SECONDS = 2
 MAX_BACKOFF_SECONDS = 60
 
@@ -25,12 +25,12 @@ class OutboxRepository:
         self._session = session
 
     async def lock_unpublished_batch(self, *, limit: int) -> list[OutboxEvent]:
-        """Bloquea hasta `limit` filas pendientes y listas para reintentar.
+        """Locks up to `limit` pending rows that are ready to be retried.
 
-        `FOR UPDATE SKIP LOCKED` es lo que hace seguro correr varias
-        instancias del relay a la vez: si dos procesos compiten por el mismo
-        lote, cada uno se queda con lo que consiguió bloquear y salta lo que
-        el otro ya tomó, en vez de esperar o duplicar el envío.
+        `FOR UPDATE SKIP LOCKED` is what makes it safe to run several relay
+        instances at once: if two processes compete for the same batch,
+        each keeps whatever it managed to lock and skips what the other
+        already took, instead of waiting or double-sending.
         """
         now = datetime.now(UTC)
         stmt = (
@@ -64,16 +64,17 @@ class OutboxRepository:
         )
 
     async def purge_published(self, *, older_than: datetime) -> int:
-        """Borra filas ya publicadas más viejas que `older_than`. Sin esto la
-        tabla crece para siempre aunque el relay funcione perfecto — cada
-        fila publicada se queda ahí. Las filas sin publicar nunca se tocan,
-        sin importar su edad: solo `published_at IS NOT NULL` es candidato.
+        """Deletes already-published rows older than `older_than`. Without
+        this the table grows forever even if the relay works perfectly —
+        every published row just stays there. Unpublished rows are never
+        touched, no matter their age: only `published_at IS NOT NULL` is a
+        candidate.
         """
         result = await self._session.execute(
             delete(OutboxEvent)
             .where(OutboxEvent.published_at.is_not(None))
             .where(OutboxEvent.published_at < older_than)
         )
-        # `execute()` de un DELETE devuelve un CursorResult en tiempo real
-        # (trae rowcount); el tipo genérico de SQLAlchemy no lo refleja.
+        # `execute()` on a DELETE returns a CursorResult at runtime (it
+        # carries rowcount); SQLAlchemy's generic typing doesn't reflect that.
         return cast("CursorResult[Any]", result).rowcount

@@ -1,21 +1,23 @@
-"""Garantiza que una operación con `Idempotency-Key` se ejecuta como mucho una
-vez por (user_id, key), incluso bajo peticiones concurrentes idénticas.
+"""Guarantees that an operation with an `Idempotency-Key` runs at most once
+per (user_id, key), even under identical concurrent requests.
 
-Reutilizado por `place_bet` y `deposit` — ambos mueven dinero, y un reintento
-de red no debe cobrar (ni acreditar) dos veces en ninguno de los dos.
+Reused by `place_bet` and `deposit` — both move money, and a network retry
+must not charge (or credit) twice in either one.
 
-El mecanismo son tres transacciones independientes, no una:
+The mechanism is three independent transactions, not one:
 
-1. Reservar la clave (INSERT `status='pending'`, se comete de inmediato). La
-   UNIQUE(user_id, key) de la tabla es quien decide, a nivel de Postgres, cuál
-   de dos peticiones simultáneas gana — no hay ventana de carrera posible: la
-   segunda petición ve el choque de la constraint antes de tocar nada de negocio.
-2. Si se ganó la reserva: ejecutar el trabajo real y marcar la clave como
-   completada, en la misma transacción (se comete junto o no se comete nada).
-3. Si el trabajo real falla: esa transacción se revierte entera, pero la fila
-   'pending' de (1) ya estaba comprometida aparte y queda huérfana — se borra
-   en una tercera transacción, para que un reintento posterior con la misma
-   clave no se quede bloqueado para siempre viendo un "en curso" que ya no lo está.
+1. Reserve the key (INSERT `status='pending'`, committed immediately). The
+   table's UNIQUE(user_id, key) is what decides, at the Postgres level,
+   which of two simultaneous requests wins — there's no possible race
+   window: the second request hits the constraint violation before
+   touching any business logic.
+2. If the reservation was won: run the real work and mark the key as
+   completed, in the same transaction (committed together or not at all).
+3. If the real work fails: that transaction rolls back entirely, but the
+   'pending' row from (1) was already committed separately and is now
+   orphaned — it gets deleted in a third transaction, so a later retry
+   with the same key doesn't stay blocked forever looking at an
+   "in progress" that no longer is one.
 """
 
 import hashlib
@@ -29,23 +31,23 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.repositories.idempotency import IdempotencyKeyRepository
 
-#: Cuánto se espera, como mucho, a que termine una petición antes de asumir
-#: que el proceso que la empezó murió a medio camino y la fila 'pending' es
-#: basura reclamable. Muy por encima de lo que tarda cualquier operación real.
+#: The longest we wait for a request to finish before assuming the process
+#: that started it died halfway through and the 'pending' row is
+#: reclaimable garbage. Well above what any real operation takes.
 PENDING_RECLAIM_SECONDS = 30
 
-#: Tope del header Idempotency-Key. 200 es generoso para cualquier esquema de
-#: cliente razonable (UUID, ULID, etc.) y evita que alguien mande un string
-#: de varios megabytes que terminaría guardado tal cual en la tabla.
+#: Cap on the Idempotency-Key header. 200 is generous for any reasonable
+#: client scheme (UUID, ULID, etc.) and stops someone from sending a
+#: multi-megabyte string that would end up stored as-is in the table.
 IDEMPOTENCY_KEY_MAX_LENGTH = 200
 
 
 class IdempotencyKeyConflictError(Exception):
-    """La misma Idempotency-Key se usó antes con un cuerpo de petición distinto."""
+    """The same Idempotency-Key was used before with a different request body."""
 
 
 class IdempotencyInProgressError(Exception):
-    """Ya hay una petición con esta misma clave procesándose en este momento."""
+    """A request with this same key is already being processed right now."""
 
 
 def hash_request_body(body: bytes) -> str:
@@ -60,7 +62,7 @@ async def _try_reserve(
     request_hash: str,
     ttl_hours: int,
 ) -> uuid.UUID | None:
-    """None si la clave ya existe (choque de UNIQUE); si no, el id reservado."""
+    """None if the key already exists (UNIQUE violation); otherwise, the reserved id."""
     async with session_factory() as session:
         try:
             async with session.begin():
@@ -83,14 +85,15 @@ async def _resolve_existing(
     key: str,
     request_hash: str,
 ) -> dict[str, Any] | None:
-    """La respuesta cacheada si ya terminó; None si se reclamó una fila
-    abandonada y toca reintentar la reserva. Levanta si hay conflicto real."""
+    """The cached response if it already finished; None if an abandoned row
+    was reclaimed and the reservation needs to be retried. Raises if there's
+    a real conflict."""
     async with session_factory() as session:
         repo = IdempotencyKeyRepository(session)
         existing = await repo.get(user_id, key)
 
         if existing is None:
-            return None  # otra petición la reclamó justo entre el choque y esta lectura
+            return None  # another request reclaimed it right between the collision and this read
 
         if existing.request_hash != request_hash:
             raise IdempotencyKeyConflictError
@@ -102,9 +105,9 @@ async def _resolve_existing(
         if not stuck:
             raise IdempotencyInProgressError
 
-        # Sin `session.begin()` aquí: el SELECT de arriba ya auto-inició una
-        # transacción en esta sesión (autobegin de SQLAlchemy) — abrir otra
-        # encima levantaría "a transaction is already begun".
+        # No `session.begin()` here: the SELECT above already auto-started a
+        # transaction on this session (SQLAlchemy's autobegin) — opening
+        # another one on top would raise "a transaction is already begun".
         await repo.delete(existing.id)
         await session.commit()
         return None
@@ -129,7 +132,7 @@ async def run_idempotent(
         )
         if cached is not None:
             return cached
-        # Se reclamó una fila abandonada: un único reintento de la reserva.
+        # An abandoned row was reclaimed: a single retry of the reservation.
         row_id = await _try_reserve(
             session_factory,
             user_id=user_id,

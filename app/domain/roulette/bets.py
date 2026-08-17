@@ -1,4 +1,4 @@
-"""Validación de apuestas y traducción de su `selection` a números cubiertos."""
+"""Bet validation and translating its `selection` into covered numbers."""
 
 from dataclasses import dataclass
 
@@ -15,13 +15,14 @@ from app.domain.roulette.table import (
     BetType,
 )
 
-#: Misma forma que `Selection` en app/events/schemas.py — ver ese módulo para
-#: por qué domain es quien la posee (domain no depende de events, es al revés).
+#: Same shape as `Selection` in app/events/schemas.py — see that module for
+#: why domain owns it (domain doesn't depend on events, it's the other way
+#: around).
 Selection = dict[str, int | list[int]]
 
 
 class InvalidBetError(ValueError):
-    """La selección o el stake no son válidos para este tipo de apuesta."""
+    """The selection or the stake isn't valid for this bet type."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,39 +56,39 @@ _INDEX_SELECTIONS: dict[BetType, dict[int, frozenset[int]]] = {
 
 
 def covered_numbers(bet_type: BetType, selection: Selection) -> frozenset[int]:
-    """Los números que hacen ganar a esta apuesta. Levanta InvalidBetError si `selection`
-    no tiene la forma correcta o no describe una figura válida en la mesa.
+    """The numbers that make this bet win. Raises InvalidBetError if `selection`
+    doesn't have the right shape or doesn't describe a valid figure on the table.
     """
     if bet_type in _FIXED_SELECTIONS:
         if selection:
-            raise InvalidBetError(f"{bet_type} no admite selection: {selection!r}")
+            raise InvalidBetError(f"{bet_type} does not accept a selection: {selection!r}")
         return _FIXED_SELECTIONS[bet_type]
 
     if bet_type in _NUMBERS_SELECTIONS:
         numbers = selection.get("numbers")
         if not isinstance(numbers, list):
-            raise InvalidBetError(f"{bet_type} requiere 'numbers': {selection!r}")
+            raise InvalidBetError(f"{bet_type} requires 'numbers': {selection!r}")
         candidate = frozenset(numbers)
         if candidate in _NUMBERS_SELECTIONS[bet_type]:
             return candidate
-        raise InvalidBetError(f"{numbers} no forman un {bet_type.value} válido en la mesa")
+        raise InvalidBetError(f"{numbers} don't form a valid {bet_type.value} on the table")
 
     if bet_type in _INDEX_SELECTIONS:
         index = selection.get("index")
         by_index = _INDEX_SELECTIONS[bet_type]
         if isinstance(index, int) and index in by_index:
             return by_index[index]
-        raise InvalidBetError(f"{bet_type} requiere 'index' en 1..3: {selection!r}")
+        raise InvalidBetError(f"{bet_type} requires 'index' in 1..3: {selection!r}")
 
-    raise InvalidBetError(f"bet_type desconocido: {bet_type!r}")  # pragma: no cover
+    raise InvalidBetError(f"unknown bet_type: {bet_type!r}")  # pragma: no cover
 
 
 def validate_bet(bet: PlacedBet, *, min_bet: Money, max_bet: Money) -> None:
-    """Válida forma y límites de mesa. Levanta InvalidBetError si algo no cuadra."""
+    """Validates shape and table limits. Raises InvalidBetError if something doesn't add up."""
     if bet.stake.currency != min_bet.currency:
-        raise InvalidBetError(f"stake en {bet.stake.currency}, mesa en {min_bet.currency}")
+        raise InvalidBetError(f"stake in {bet.stake.currency}, table in {min_bet.currency}")
     if bet.stake < min_bet or max_bet < bet.stake:
         raise InvalidBetError(
-            f"stake {bet.stake.minor} fuera de límites [{min_bet.minor}, {max_bet.minor}]"
+            f"stake {bet.stake.minor} out of bounds [{min_bet.minor}, {max_bet.minor}]"
         )
-    covered_numbers(bet.bet_type, bet.selection)  # valida la forma; descarta el resultado
+    covered_numbers(bet.bet_type, bet.selection)  # validates shape; discards the result

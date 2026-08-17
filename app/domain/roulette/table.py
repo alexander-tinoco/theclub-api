@@ -1,19 +1,19 @@
-"""Geometría de la mesa: de dónde salen los tipos de apuesta válidos.
+"""Table geometry: where the valid bet types come from.
 
-Los números 1-36 se ubican en una rejilla de 3 filas x 12 columnas, tal como
-están impresos en una mesa real:
+Numbers 1-36 sit on a 3-row x 12-column grid, just like they're printed on
+a real table:
 
     3  6  9 12 15 18 21 24 27 30 33 36
     2  5  8 11 14 17 20 23 26 29 32 35
     1  4  7 10 13 16 19 22 25 28 31 34
 
-Split/street/corner/line/column no son listas escritas a mano: se derivan de
-esa rejilla, así una apuesta que no encaje geométricamente (un "corner" con 4
-números sueltos) se rechaza sola en `bets.py`.
+Split/street/corner/line/column aren't hand-written lists: they're derived
+from that grid, so a bet that doesn't fit geometrically (a "corner" with 4
+loose numbers) rejects itself in `bets.py`.
 
-Simplificación consciente: el 0 solo participa en straight. Las apuestas de
-"cesto" que en la ruleta francesa incluyen al 0 en un split/corner tienen una
-geometría irregular fuera de esta rejilla y quedan fuera de alcance.
+Deliberate simplification: 0 only participates in straight bets. The
+"basket" bets that French roulette lets include 0 in a split/corner have
+an irregular geometry outside this grid and are out of scope.
 """
 
 from dataclasses import dataclass
@@ -29,7 +29,7 @@ _COLS = 12
 
 
 def _position(number: int) -> tuple[int, int]:
-    """(fila, columna), ambas 1-indexadas. Solo válido para 1..36."""
+    """(row, column), both 1-indexed. Only valid for 1..36."""
     row = (number - 1) % _ROWS + 1
     col = (number - 1) // _ROWS + 1
     return row, col
@@ -79,17 +79,17 @@ BET_SPECS: dict[BetType, BetSpec] = {
 
 
 def _streets() -> list[frozenset[int]]:
-    """Una columna de la rejilla = 3 números consecutivos: {1,2,3}, {4,5,6}..."""
+    """One grid column = 3 consecutive numbers: {1,2,3}, {4,5,6}..."""
     return [frozenset(_number_at(r, c) for r in range(1, _ROWS + 1)) for c in range(1, _COLS + 1)]
 
 
 def _columns() -> list[frozenset[int]]:
-    """Una fila de la rejilla = los 12 números de una "columna" de apuesta."""
+    """One grid row = the 12 numbers of a betting "column"."""
     return [frozenset(_number_at(r, c) for c in range(1, _COLS + 1)) for r in range(1, _ROWS + 1)]
 
 
 def _corners() -> list[frozenset[int]]:
-    """Cada bloque 2x2 de la rejilla."""
+    """Every 2x2 block of the grid."""
     return [
         frozenset(
             {
@@ -105,13 +105,13 @@ def _corners() -> list[frozenset[int]]:
 
 
 def _lines() -> list[frozenset[int]]:
-    """Dos streets contiguos."""
+    """Two adjacent streets."""
     streets = _streets()
     return [streets[c] | streets[c + 1] for c in range(len(streets) - 1)]
 
 
 def _splits() -> list[frozenset[int]]:
-    """Cada par de celdas vecinas (comparten un lado) de la rejilla."""
+    """Every pair of neighboring cells (sharing a side) in the grid."""
     splits = []
     for n in range(1, 37):
         r, c = _position(n)

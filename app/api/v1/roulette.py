@@ -133,10 +133,10 @@ async def create_round(
         ttl_hours=settings.IDEMPOTENCY_KEY_TTL_HOURS,
         work=work,
     )
-    # Sale siempre que la petición terminó en éxito, incluso en un reintento
-    # idempotente que solo repite la respuesta cacheada — un WS duplicado con
-    # el mismo round_id es un redibujo inofensivo, no un doble cobro (eso lo
-    # impide `run_idempotent`, no esto).
+    # Runs whenever the request ended in success, even on an idempotent
+    # retry that just replays the cached response — a duplicate WS push
+    # with the same round_id is a harmless re-render, not a double charge
+    # (that's what `run_idempotent` prevents, not this).
     await broadcaster.publish(user.id, {"type": "round.settled", **result})
 
     any_won = any(bet["won"] for bet in result["bets"])
@@ -181,10 +181,10 @@ async def list_rounds(
     items = []
     for r in rounds:
         if r.outcome is None:
-            # Este juego resuelve la ronda de inmediato: toda fila que
-            # create_settled_round crea ya trae outcome. Si esto salta, algo
-            # en otra parte del sistema violó ese contrato.
-            raise DataIntegrityError(f"round {r.id} sin outcome")
+            # This game resolves the round immediately: every row
+            # create_settled_round creates already has an outcome. If this
+            # trips, something elsewhere in the system violated that contract.
+            raise DataIntegrityError(f"round {r.id} has no outcome")
         items.append(
             RoundHistoryItem(
                 round_id=r.id,

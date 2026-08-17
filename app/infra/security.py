@@ -1,12 +1,12 @@
-"""Hashing de contraseñas (argon2id) y JWT de access token.
+"""Password hashing (argon2id) and access-token JWTs.
 
-Los refresh tokens NO se emiten aquí como JWT: son un string aleatorio opaco
-(`generate_refresh_token`) del que solo se guarda el hash SHA-256. Como de
-todas formas hay que consultar la base de datos en cada refresh para saber si
-está revocado, un JWT no aporta nada — y sí puede filtrar metadata en su
-payload aunque esté firmado. SHA-256 y no argon2 aquí a propósito: argon2 es
-caro para resistir fuerza bruta sobre secretos de baja entropía (contraseñas);
-un token aleatorio de 256 bits no la necesita.
+Refresh tokens are NOT issued here as JWTs: they're an opaque random string
+(`generate_refresh_token`) of which only the SHA-256 hash is stored. Since
+the database has to be checked on every refresh anyway to know whether it's
+revoked, a JWT adds nothing — and it could leak metadata in its payload
+even while signed. SHA-256 and not argon2 here on purpose: argon2 is
+expensive to resist brute force over low-entropy secrets (passwords); a
+256-bit random token doesn't need that.
 """
 
 import hashlib
@@ -36,11 +36,11 @@ def verify_password(password: str, password_hash: str) -> bool:
 
 
 class TokenExpiredError(Exception):
-    """El JWT tiene una firma válida pero ya caducó."""
+    """The JWT has a valid signature but has already expired."""
 
 
 class InvalidTokenError(Exception):
-    """Firma inválida, formato incorrecto, o claims que faltan."""
+    """Invalid signature, malformed, or missing claims."""
 
 
 def create_access_token(
@@ -58,13 +58,13 @@ def create_access_token(
 def decode_access_token(
     token: str, *, secret: str, algorithm: str, previous_secrets: Sequence[str] = ()
 ) -> uuid.UUID:
-    """`secret` primero, `previous_secrets` después, en orden: así un token
-    firmado con un secreto ya rotado se sigue aceptando mientras siga en la
-    lista, sin que eso retrase la verificación de un token recién emitido
-    (el caso común). Con HS256 la firma nunca "matchea por accidente" bajo
-    un secreto que no es el suyo, así que la primera vez que un candidato
-    produce `ExpiredSignatureError` es porque *ese* era el secreto correcto
-    — ahí se corta, no tiene sentido seguir probando los demás.
+    """`secret` first, `previous_secrets` after, in order: that way a token
+    signed with an already-rotated secret is still accepted while it stays
+    in the list, without slowing down verification of a freshly issued
+    token (the common case). With HS256 a signature never "matches by
+    accident" under a secret that isn't its own, so the first time a
+    candidate produces `ExpiredSignatureError` it's because *that* was the
+    right secret — it stops right there, no point trying the rest.
     """
     payload = None
     for candidate in (secret, *previous_secrets):

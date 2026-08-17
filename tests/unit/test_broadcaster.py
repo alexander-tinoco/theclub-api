@@ -9,13 +9,13 @@ from app.ws.connections import ConnectionRegistry
 pytestmark = pytest.mark.unit
 
 
-async def test_publish_sin_ningun_suscriptor_no_hace_nada() -> None:
+async def test_publish_with_no_subscribers_does_nothing() -> None:
     broadcaster = InMemoryBroadcaster()
 
     await broadcaster.publish(uuid.uuid4(), {"type": "round.settled"})
 
 
-async def test_un_suscriptor_recibe_lo_publicado_para_su_usuario() -> None:
+async def test_a_subscriber_receives_what_is_published_for_their_user() -> None:
     broadcaster = InMemoryBroadcaster()
     user_id = uuid.uuid4()
 
@@ -27,7 +27,7 @@ async def test_un_suscriptor_recibe_lo_publicado_para_su_usuario() -> None:
     assert message == {"type": "round.settled"}
 
 
-async def test_no_recibe_mensajes_de_otro_usuario() -> None:
+async def test_does_not_receive_messages_for_another_user() -> None:
     broadcaster = InMemoryBroadcaster()
     user_id = uuid.uuid4()
     other_user_id = uuid.uuid4()
@@ -39,7 +39,7 @@ async def test_no_recibe_mensajes_de_otro_usuario() -> None:
             await asyncio.wait_for(queue.get(), timeout=0.1)
 
 
-async def test_varias_conexiones_del_mismo_usuario_reciben_el_mismo_mensaje() -> None:
+async def test_several_connections_for_the_same_user_receive_the_same_message() -> None:
     broadcaster = InMemoryBroadcaster()
     user_id = uuid.uuid4()
 
@@ -53,7 +53,7 @@ async def test_varias_conexiones_del_mismo_usuario_reciben_el_mismo_mensaje() ->
     assert message_b == {"type": "balance.updated"}
 
 
-async def test_desuscribirse_deja_de_recibir_y_limpia_el_registro_interno() -> None:
+async def test_unsubscribing_stops_delivery_and_cleans_up_the_internal_registry() -> None:
     broadcaster = InMemoryBroadcaster()
     user_id = uuid.uuid4()
 
@@ -62,11 +62,11 @@ async def test_desuscribirse_deja_de_recibir_y_limpia_el_registro_interno() -> N
 
     assert user_id not in broadcaster._subscribers
 
-    # publicar después de que no queda nadie no debe levantar
+    # publishing after nobody is left must not raise
     await broadcaster.publish(user_id, {"type": "round.settled"})
 
 
-async def test_una_queue_llena_descarta_el_mensaje_mas_viejo_no_bloquea() -> None:
+async def test_a_full_queue_drops_the_oldest_message_instead_of_blocking() -> None:
     broadcaster = InMemoryBroadcaster()
     user_id = uuid.uuid4()
 
@@ -76,14 +76,14 @@ async def test_una_queue_llena_descarta_el_mensaje_mas_viejo_no_bloquea() -> Non
 
         assert queue.qsize() == QUEUE_MAXSIZE
         first = await queue.get()
-        # se descartaron los más viejos: el primero que queda no es el 0
+        # the oldest ones were dropped: the first one left isn't 0
         assert first["seq"] > 0
 
 
 class _FakeWebSocket:
-    """Doble mínimo: `ConnectionRegistry` solo necesita que sea hasheable y
-    que tenga un `close(code=...)` awaitable — no vale la pena montar un
-    `WebSocket` real de Starlette para esto.
+    """Minimal double: `ConnectionRegistry` only needs it to be hashable
+    and to have an awaitable `close(code=...)` — not worth setting up a
+    real Starlette `WebSocket` for this.
     """
 
     def __init__(self) -> None:
@@ -93,7 +93,7 @@ class _FakeWebSocket:
         self.closed_with = code
 
 
-async def test_connection_registry_respeta_el_limite_maximo() -> None:
+async def test_connection_registry_respects_the_max_limit() -> None:
     registry = ConnectionRegistry(max_connections=1)
     first = _FakeWebSocket()
     second = _FakeWebSocket()
@@ -102,7 +102,7 @@ async def test_connection_registry_respeta_el_limite_maximo() -> None:
     assert registry.try_register(second) is False  # type: ignore[arg-type]
 
 
-async def test_connection_registry_libera_el_cupo_al_desregistrar() -> None:
+async def test_connection_registry_frees_the_slot_on_unregister() -> None:
     registry = ConnectionRegistry(max_connections=1)
     first = _FakeWebSocket()
     second = _FakeWebSocket()
@@ -113,7 +113,7 @@ async def test_connection_registry_libera_el_cupo_al_desregistrar() -> None:
     assert registry.try_register(second) is True  # type: ignore[arg-type]
 
 
-async def test_close_all_cierra_todas_las_conexiones_registradas() -> None:
+async def test_close_all_closes_every_registered_connection() -> None:
     registry = ConnectionRegistry(max_connections=10)
     connections = [_FakeWebSocket() for _ in range(3)]
     for ws in connections:
@@ -124,12 +124,12 @@ async def test_close_all_cierra_todas_las_conexiones_registradas() -> None:
     assert all(ws.closed_with == 1001 for ws in connections)
 
 
-async def test_close_all_con_una_conexion_que_falla_al_cerrar_no_frena_al_resto() -> None:
+async def test_close_all_with_a_connection_that_fails_to_close_does_not_stop_the_rest() -> None:
     registry = ConnectionRegistry(max_connections=10)
 
     class _BrokenWebSocket(_FakeWebSocket):
         async def close(self, code: int = 1000) -> None:
-            raise RuntimeError("ya estaba cerrada")
+            raise RuntimeError("already closed")
 
     broken = _BrokenWebSocket()
     healthy = _FakeWebSocket()

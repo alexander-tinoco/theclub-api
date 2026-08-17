@@ -1,7 +1,8 @@
-"""Casos de uso de autenticación: registrar, entrar, refrescar sesión.
+"""Authentication use cases: register, log in, refresh a session.
 
-Orquesta repositorios + `app/infra/security.py`. No sabe nada de HTTP —
-`app/api/errors.py` traduce estas excepciones a respuestas concretas.
+Orchestrates repositories + `app/infra/security.py`. Knows nothing about
+HTTP — `app/api/errors.py` translates these exceptions into concrete
+responses.
 """
 
 import uuid
@@ -30,21 +31,22 @@ from app.services.fairness import generate_client_seed
 
 
 class EmailAlreadyExistsError(Exception):
-    """Ya existe un usuario con ese email."""
+    """A user with that email already exists."""
 
 
 class InvalidCredentialsError(Exception):
-    """Email desconocido o contraseña incorrecta — mismo error para los dos
-    casos, para no revelar con un mensaje distinto qué emails existen."""
+    """Unknown email or wrong password — same error for both cases, so a
+    different message doesn't reveal which emails exist."""
 
 
 class UserSuspendedError(Exception):
-    """La cuenta existe pero `status == 'suspended'`."""
+    """The account exists but `status == 'suspended'`."""
 
 
 class RefreshTokenReusedError(Exception):
-    """Un refresh token ya rotado (`revoked_at` no nulo) volvió a presentarse:
-    señal de robo. Se revoca toda la familia como respuesta."""
+    """An already-rotated refresh token (`revoked_at` not null) was
+    presented again: a sign of theft. The entire family is revoked in
+    response."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,9 +65,9 @@ async def register_user(
     user = await users.create(email=email, password_hash=hash_password(password))
     session.add(Wallet(user_id=user.id, balance_minor=0))
 
-    # Sin esto no hay hash publicado y no se puede apostar de forma
-    # verificable: el primer par de semillas se crea aquí, no de forma
-    # perezosa en el primer giro, para que el hash exista desde el registro.
+    # Without this there's no published hash and no way to bet verifiably:
+    # the first seed pair is created here, not lazily on the first spin, so
+    # the hash exists from registration onward.
     server_seed = new_server_seed()
     await SeedPairRepository(session).create_active(
         user_id=user.id,
@@ -106,11 +108,11 @@ async def refresh_access_token(
 
     if stored.revoked_at is not None:
         await tokens_repo.revoke_family(stored.family_id, revoked_at=now)
-        # Commit explícito: `get_session` envuelve el request en una única
-        # transacción que se revierte al propagar una excepción, y aquí el
-        # efecto (revocar la familia) debe sobrevivir precisamente al error
-        # que estamos a punto de lanzar — es la respuesta al robo, no un
-        # detalle incidental que valga la pena perder.
+        # Explicit commit: `get_session` wraps the request in a single
+        # transaction that rolls back when an exception propagates, and
+        # here the effect (revoking the family) must survive precisely the
+        # error we're about to raise — it's the response to the theft, not
+        # an incidental detail worth losing.
         await session.commit()
         raise RefreshTokenReusedError
 
@@ -124,14 +126,15 @@ async def refresh_access_token(
 
 
 async def logout(session: AsyncSession, *, user_id: uuid.UUID, raw_refresh_token: str) -> None:
-    """Revoca la familia completa del refresh token — no solo esa fila, toda
-    la sesión que empezó con el login o refresh que la originó.
+    """Revokes the refresh token's entire family — not just that row, the
+    whole session that started with the login or refresh that originated it.
 
-    Idempotente a propósito: si el token no existe, ya caducó, o pertenece a
-    otro usuario, no es un error — el resultado que el cliente quiere
-    ("que esta sesión ya no sirva") ya se cumple igual. Comparar
-    `stored.user_id == user_id` evita además que alguien cierre la sesión de
-    otra cuenta pasando un refresh token ajeno en el cuerpo.
+    Idempotent on purpose: if the token doesn't exist, already expired, or
+    belongs to another user, it's not an error — the outcome the client
+    wants ("this session no longer works") already holds either way.
+    Comparing `stored.user_id == user_id` also stops someone from logging
+    out another account's session by passing someone else's refresh token
+    in the body.
     """
     stored = await RefreshTokenRepository(session).get_by_hash(
         hash_refresh_token(raw_refresh_token)

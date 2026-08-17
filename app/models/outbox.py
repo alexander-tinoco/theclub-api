@@ -10,11 +10,11 @@ from app.models.base import Base
 
 
 class OutboxEvent(Base):
-    """Patrón outbox (Fase 6): el servicio inserta aquí en la misma transacción
-    que muta el negocio; un relay en background publica y marca `published_at`.
-    El índice parcial es lo que hace barata la consulta del relay
-    (`WHERE published_at IS NULL`) aunque la tabla acumule millones de filas
-    ya publicadas.
+    """Outbox pattern (Phase 6): the service inserts here in the same
+    transaction that mutates business state; a background relay publishes
+    and marks `published_at`. The partial index is what keeps the relay's
+    query (`WHERE published_at IS NULL`) cheap even as the table
+    accumulates millions of already-published rows.
     """
 
     __tablename__ = "outbox"
@@ -28,9 +28,9 @@ class OutboxEvent(Base):
     published_at: Mapped[datetime | None]
     attempts: Mapped[int] = mapped_column(default=0)
     last_error: Mapped[str | None]
-    # NULL = elegible de inmediato. Tras un fallo se pone en el futuro (backoff
-    # exponencial) para que una fila que falla no se reintente en cada poll
-    # (cada 500ms por defecto) mientras Kafka esté caído.
+    # NULL = eligible right away. After a failure it's set in the future
+    # (exponential backoff) so a failing row isn't retried on every poll
+    # (every 500ms by default) while Kafka is down.
     next_attempt_at: Mapped[datetime | None]
 
     __table_args__ = (

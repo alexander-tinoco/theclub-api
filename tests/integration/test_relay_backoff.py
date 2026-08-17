@@ -1,9 +1,10 @@
-"""El test de la caída real de Redpanda (`test_kafka_outage.py`) no ejercita
-la rama de fallo por fila de `relay_once` ni el `except` de ciclo completo de
-`relay_loop`: cuando el contenedor vuelve a tiempo, el `AIOKafkaProducer`
-reintenta internamente y el envío nunca llega a lanzar hasta nuestro código.
-Aquí se fuerza el fallo con un productor falso, sin red real de por medio,
-para probar el camino de backoff/reintento que sí es responsabilidad nuestra.
+"""The real Redpanda outage test (`test_kafka_outage.py`) doesn't exercise
+`relay_once`'s per-row failure branch nor `relay_loop`'s full-cycle
+`except`: when the container comes back in time, `AIOKafkaProducer`
+retries internally and the send never gets to raise up into our code.
+Here the failure is forced with a fake producer, with no real network
+involved, to test the backoff/retry path that actually is our
+responsibility.
 """
 
 import asyncio
@@ -23,7 +24,7 @@ from app.models.outbox import OutboxEvent
 pytestmark = pytest.mark.integration
 
 
-async def test_relay_once_marca_failed_y_agenda_backoff_si_falla_el_envio(
+async def test_relay_once_marks_failed_and_schedules_backoff_if_the_send_fails(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
@@ -36,15 +37,15 @@ async def test_relay_once_marca_failed_y_agenda_backoff_si_falla_el_envio(
     await db_session.commit()
 
     producer = AsyncMock()
-    producer.send_and_wait.side_effect = RuntimeError("boom: broker inalcanzable")
+    producer.send_and_wait.side_effect = RuntimeError("boom: broker unreachable")
 
     published = await relay_once(session_factory, producer)
     assert published == 1
 
-    # Consulta desde una sesión nueva: `db_session` ya tiene `row` en su mapa
-    # de identidad con `attempts=0` y `expire_on_commit=False` no lo invalida,
-    # así que reutilizarla devolvería el objeto en memoria, no lo que el
-    # relay (con su propia sesión) de verdad escribió.
+    # Queried from a fresh session: `db_session` already has `row` in its
+    # identity map with `attempts=0`, and `expire_on_commit=False` doesn't
+    # invalidate that, so reusing it would return the in-memory object, not
+    # what the relay (with its own session) actually wrote.
     async with session_factory() as verify_session:
         refreshed = (
             await verify_session.execute(select(OutboxEvent).where(OutboxEvent.id == row.id))
@@ -56,7 +57,7 @@ async def test_relay_once_marca_failed_y_agenda_backoff_si_falla_el_envio(
     assert refreshed.next_attempt_at > datetime.now(UTC)
 
 
-async def test_relay_once_no_reintenta_una_fila_agendada_en_el_futuro(
+async def test_relay_once_does_not_retry_a_row_scheduled_in_the_future(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
@@ -77,7 +78,7 @@ async def test_relay_once_no_reintenta_una_fila_agendada_en_el_futuro(
     producer.send_and_wait.assert_not_called()
 
 
-async def test_relay_loop_no_muere_si_un_ciclo_falla_por_completo(
+async def test_relay_loop_does_not_die_if_a_cycle_fails_entirely(
     monkeypatch: pytest.MonkeyPatch,
     integration_settings: Settings,
 ) -> None:
@@ -86,15 +87,15 @@ async def test_relay_loop_no_muere_si_un_ciclo_falla_por_completo(
     async def _broken_relay_once(*args: object, **kwargs: object) -> int:
         nonlocal calls
         calls += 1
-        raise RuntimeError("fallo de ciclo completo, no de una fila")
+        raise RuntimeError("full-cycle failure, not a single-row one")
 
     monkeypatch.setattr(relay_module, "relay_once", _broken_relay_once)
     settings = integration_settings.model_copy(update={"OUTBOX_POLL_INTERVAL_MS": 50})
 
     task = asyncio.create_task(relay_loop(AsyncMock(), AsyncMock(), settings))
     await asyncio.sleep(0.2)
-    assert not task.done(), "el loop no debe morir por un ciclo que falla por completo"
-    assert calls >= 2, "debe seguir reintentando tras el fallo, no quedarse atascado"
+    assert not task.done(), "the loop must not die from a cycle that fails entirely"
+    assert calls >= 2, "must keep retrying after the failure, not get stuck"
 
     task.cancel()
     with pytest.raises(asyncio.CancelledError):

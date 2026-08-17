@@ -1,6 +1,6 @@
-"""El DoD de la Fase 4, contra Postgres real: token expirado, firma inválida,
-refresh reusado (revoca la familia), email duplicado, y que el hash de
-contraseña nunca aparece en una respuesta.
+"""Phase 4's DoD, against a real Postgres: expired token, invalid
+signature, reused refresh (revokes the family), duplicate email, and that
+the password hash never shows up in a response.
 """
 
 import uuid
@@ -31,9 +31,9 @@ pytestmark = pytest.mark.integration
 
 @pytest.fixture(autouse=True)
 def _reset_rate_limiter() -> None:
-    # El Limiter es un singleton a nivel de módulo (main.py necesita la misma
-    # instancia que los routers para registrar el middleware) — sin resetear
-    # su almacenamiento en memoria, los contadores se acumulan entre tests.
+    # The Limiter is a module-level singleton (main.py needs the same
+    # instance as the routers to register the middleware) — without
+    # resetting its in-memory storage, counters accumulate across tests.
     limiter.reset()
 
 
@@ -47,10 +47,10 @@ async def client(integration_settings: Settings) -> AsyncIterator[AsyncClient]:
 
 
 def _credentials(email: str | None = None) -> dict[str, str]:
-    return {"email": email or f"{uuid.uuid4()}@example.com", "password": "contraseña-larga"}
+    return {"email": email or f"{uuid.uuid4()}@example.com", "password": "a-long-password"}
 
 
-async def test_register_devuelve_tokens(client: AsyncClient) -> None:
+async def test_register_returns_tokens(client: AsyncClient) -> None:
     response = await client.post("/api/v1/auth/register", json=_credentials())
 
     assert response.status_code == 201
@@ -60,7 +60,7 @@ async def test_register_devuelve_tokens(client: AsyncClient) -> None:
     assert body["refresh_token"]
 
 
-async def test_register_email_duplicado(client: AsyncClient) -> None:
+async def test_register_duplicate_email(client: AsyncClient) -> None:
     payload = _credentials()
 
     await client.post("/api/v1/auth/register", json=payload)
@@ -69,7 +69,7 @@ async def test_register_email_duplicado(client: AsyncClient) -> None:
     assert response.status_code == 409
 
 
-async def test_login_correcto(client: AsyncClient) -> None:
+async def test_login_success(client: AsyncClient) -> None:
     payload = _credentials()
     await client.post("/api/v1/auth/register", json=payload)
 
@@ -78,13 +78,13 @@ async def test_login_correcto(client: AsyncClient) -> None:
     assert response.status_code == 200
 
 
-async def test_login_credenciales_invalidas(client: AsyncClient) -> None:
+async def test_login_invalid_credentials(client: AsyncClient) -> None:
     response = await client.post("/api/v1/auth/login", json=_credentials())
 
     assert response.status_code == 401
 
 
-async def test_login_usuario_suspendido(client: AsyncClient, db_session: AsyncSession) -> None:
+async def test_login_suspended_user(client: AsyncClient, db_session: AsyncSession) -> None:
     payload = _credentials()
     await client.post("/api/v1/auth/register", json=payload)
 
@@ -98,21 +98,21 @@ async def test_login_usuario_suspendido(client: AsyncClient, db_session: AsyncSe
     assert response.status_code == 403
 
 
-async def test_refresh_con_token_desconocido(client: AsyncClient) -> None:
+async def test_refresh_with_an_unknown_token(client: AsyncClient) -> None:
     response = await client.post(
-        "/api/v1/auth/refresh", json={"refresh_token": "un-token-que-nunca-existio"}
+        "/api/v1/auth/refresh", json={"refresh_token": "a-token-that-never-existed"}
     )
 
     assert response.status_code == 401
 
 
-async def test_me_requiere_token(client: AsyncClient) -> None:
+async def test_me_requires_a_token(client: AsyncClient) -> None:
     response = await client.get("/api/v1/auth/me")
 
     assert response.status_code == 401
 
 
-async def test_me_con_token_valido(client: AsyncClient) -> None:
+async def test_me_with_a_valid_token(client: AsyncClient) -> None:
     payload = _credentials()
     register = await client.post("/api/v1/auth/register", json=payload)
     access_token = register.json()["access_token"]
@@ -125,7 +125,7 @@ async def test_me_con_token_valido(client: AsyncClient) -> None:
     assert response.json()["email"] == payload["email"]
 
 
-async def test_me_con_usuario_suspendido_despues_de_emitido_el_token(
+async def test_me_with_a_user_suspended_after_the_token_was_issued(
     client: AsyncClient, db_session: AsyncSession
 ) -> None:
     payload = _credentials()
@@ -144,11 +144,11 @@ async def test_me_con_usuario_suspendido_despues_de_emitido_el_token(
     assert response.status_code == 403
 
 
-async def test_me_con_token_de_usuario_inexistente(
+async def test_me_with_a_token_for_a_nonexistent_user(
     client: AsyncClient, integration_settings: Settings
 ) -> None:
-    # Un JWT con firma válida pero para un user_id que nunca existió (o que
-    # se borró después de emitirse el token).
+    # A JWT with a valid signature but for a user_id that never existed (or
+    # that got deleted after the token was issued).
     ghost_token = create_access_token(
         uuid.uuid4(),
         secret=integration_settings.JWT_SECRET.get_secret_value(),
@@ -163,21 +163,21 @@ async def test_me_con_token_de_usuario_inexistente(
     assert response.status_code == 401
 
 
-async def test_me_con_firma_invalida(client: AsyncClient) -> None:
+async def test_me_with_an_invalid_signature(client: AsyncClient) -> None:
     response = await client.get(
-        "/api/v1/auth/me", headers={"Authorization": "Bearer no-soy-un-jwt-valido"}
+        "/api/v1/auth/me", headers={"Authorization": "Bearer not-a-valid-jwt"}
     )
 
     assert response.status_code == 401
 
 
-async def test_me_con_token_firmado_con_un_secreto_previo_rotado(
+async def test_me_with_a_token_signed_with_a_rotated_previous_secret(
     client: AsyncClient, integration_settings: Settings
 ) -> None:
-    # El secreto "viejo" firma un token para un usuario real ya registrado
-    # con la app normal (misma base de datos) — simula un access token
-    # emitido justo antes de rotar JWT_SECRET, que debe seguir sirviendo
-    # mientras JWT_PREVIOUS_SECRETS lo mantenga.
+    # The "old" secret signs a token for a real user already registered
+    # with the normal app (same database) — simulates an access token
+    # issued right before rotating JWT_SECRET, which should keep working
+    # as long as JWT_PREVIOUS_SECRETS keeps it around.
     register = await client.post("/api/v1/auth/register", json=_credentials())
     me = await client.get(
         "/api/v1/auth/me",
@@ -185,14 +185,15 @@ async def test_me_con_token_firmado_con_un_secreto_previo_rotado(
     )
     user_id = uuid.UUID(me.json()["id"])
 
-    old_secret = "el-secreto-antes-de-rotar-de-al-menos-32-bytes"
+    old_secret = "the-secret-before-rotating-at-least-32-bytes"
     old_token = create_access_token(
         user_id, secret=old_secret, algorithm=integration_settings.JWT_ALGORITHM, ttl_seconds=900
     )
     rotated_settings = integration_settings.model_copy(
-        # `model_copy(update=...)` no revalida contra el tipo del campo (a
-        # diferencia de construir `Settings(...)` normal) — hay que darle ya
-        # el `SecretStr` que `JWT_PREVIOUS_SECRETS` espera, no un `str` a secas.
+        # `model_copy(update=...)` doesn't revalidate against the field's
+        # type (unlike a normal `Settings(...)` construction) — it needs
+        # to already get the `SecretStr` that `JWT_PREVIOUS_SECRETS`
+        # expects, not a plain `str`.
         update={"JWT_PREVIOUS_SECRETS": [SecretStr(old_secret)]}
     )
     app = create_app(rotated_settings)
@@ -207,7 +208,9 @@ async def test_me_con_token_firmado_con_un_secreto_previo_rotado(
     assert response.json()["id"] == str(user_id)
 
 
-async def test_me_con_token_expirado(client: AsyncClient, integration_settings: Settings) -> None:
+async def test_me_with_an_expired_token(
+    client: AsyncClient, integration_settings: Settings
+) -> None:
     expired = create_access_token(
         uuid.uuid4(),
         secret=integration_settings.JWT_SECRET.get_secret_value(),
@@ -220,7 +223,7 @@ async def test_me_con_token_expirado(client: AsyncClient, integration_settings: 
     assert response.status_code == 401
 
 
-async def test_refresh_rota_el_token(client: AsyncClient) -> None:
+async def test_refresh_rotates_the_token(client: AsyncClient) -> None:
     register = await client.post("/api/v1/auth/register", json=_credentials())
     old_refresh = register.json()["refresh_token"]
 
@@ -230,7 +233,7 @@ async def test_refresh_rota_el_token(client: AsyncClient) -> None:
     assert response.json()["refresh_token"] != old_refresh
 
 
-async def test_refresh_reusado_revoca_toda_la_familia(client: AsyncClient) -> None:
+async def test_reused_refresh_revokes_the_whole_family(client: AsyncClient) -> None:
     register = await client.post("/api/v1/auth/register", json=_credentials())
     original_refresh = register.json()["refresh_token"]
 
@@ -240,19 +243,19 @@ async def test_refresh_reusado_revoca_toda_la_familia(client: AsyncClient) -> No
     assert first_rotation.status_code == 200
     rotated_refresh = first_rotation.json()["refresh_token"]
 
-    # Reusar el token original (ya rotado) es la señal de un posible robo.
+    # Reusing the original (already rotated) token is the sign of a possible theft.
     reused = await client.post("/api/v1/auth/refresh", json={"refresh_token": original_refresh})
     assert reused.status_code == 401
 
-    # Como respuesta, TODA la familia queda revocada -- incluso el token que
-    # sí era el legítimo tras la rotación deja de servir.
+    # In response, the ENTIRE family gets revoked -- even the token that
+    # was legitimate after the rotation stops working.
     legit_but_revoked = await client.post(
         "/api/v1/auth/refresh", json={"refresh_token": rotated_refresh}
     )
     assert legit_but_revoked.status_code == 401
 
 
-async def test_refresh_expirado(db_session: AsyncSession, integration_settings: Settings) -> None:
+async def test_expired_refresh(db_session: AsyncSession, integration_settings: Settings) -> None:
     user = await UserRepository(db_session).create(
         email=f"{uuid.uuid4()}@example.com", password_hash="x"
     )
@@ -271,7 +274,7 @@ async def test_refresh_expirado(db_session: AsyncSession, integration_settings: 
         )
 
 
-async def test_password_hash_nunca_aparece_en_una_respuesta(
+async def test_password_hash_never_appears_in_a_response(
     client: AsyncClient, db_session: AsyncSession
 ) -> None:
     payload = _credentials()
@@ -291,7 +294,7 @@ async def test_password_hash_nunca_aparece_en_una_respuesta(
         assert "password" not in response.json()
 
 
-async def test_login_tiene_rate_limit(client: AsyncClient) -> None:
+async def test_login_has_a_rate_limit(client: AsyncClient) -> None:
     payload = _credentials()
 
     responses = [await client.post("/api/v1/auth/login", json=payload) for _ in range(6)]
@@ -299,7 +302,7 @@ async def test_login_tiene_rate_limit(client: AsyncClient) -> None:
     assert responses[-1].status_code == 429
 
 
-async def test_logout_revoca_el_refresh_token(client: AsyncClient) -> None:
+async def test_logout_revokes_the_refresh_token(client: AsyncClient) -> None:
     register = await client.post("/api/v1/auth/register", json=_credentials())
     tokens = register.json()
     headers = {"Authorization": f"Bearer {tokens['access_token']}"}
@@ -315,7 +318,9 @@ async def test_logout_revoca_el_refresh_token(client: AsyncClient) -> None:
     assert refresh.status_code == 401
 
 
-async def test_logout_revoca_toda_la_familia_no_solo_el_token_actual(client: AsyncClient) -> None:
+async def test_logout_revokes_the_whole_family_not_just_the_current_token(
+    client: AsyncClient,
+) -> None:
     register = await client.post("/api/v1/auth/register", json=_credentials())
     original = register.json()
     headers = {"Authorization": f"Bearer {original['access_token']}"}
@@ -334,7 +339,7 @@ async def test_logout_revoca_toda_la_familia_no_solo_el_token_actual(client: Asy
     assert refresh.status_code == 401
 
 
-async def test_logout_es_idempotente(client: AsyncClient) -> None:
+async def test_logout_is_idempotent(client: AsyncClient) -> None:
     register = await client.post("/api/v1/auth/register", json=_credentials())
     tokens = register.json()
     headers = {"Authorization": f"Bearer {tokens['access_token']}"}
@@ -346,18 +351,18 @@ async def test_logout_es_idempotente(client: AsyncClient) -> None:
     assert first.status_code == second.status_code == 204
 
 
-async def test_logout_con_token_desconocido_no_es_error(client: AsyncClient) -> None:
+async def test_logout_with_an_unknown_token_is_not_an_error(client: AsyncClient) -> None:
     register = await client.post("/api/v1/auth/register", json=_credentials())
     headers = {"Authorization": f"Bearer {register.json()['access_token']}"}
 
     response = await client.post(
-        "/api/v1/auth/logout", json={"refresh_token": "esto-nunca-existio"}, headers=headers
+        "/api/v1/auth/logout", json={"refresh_token": "this-never-existed"}, headers=headers
     )
 
     assert response.status_code == 204
 
 
-async def test_logout_con_refresh_token_de_otro_usuario_no_lo_revoca(
+async def test_logout_with_another_users_refresh_token_does_not_revoke_it(
     client: AsyncClient,
 ) -> None:
     victim = await client.post("/api/v1/auth/register", json=_credentials())
@@ -366,18 +371,19 @@ async def test_logout_con_refresh_token_de_otro_usuario_no_lo_revoca(
     attacker = await client.post("/api/v1/auth/register", json=_credentials())
     attacker_headers = {"Authorization": f"Bearer {attacker.json()['access_token']}"}
 
-    # El atacante está autenticado como sí mismo, pero manda el refresh token
-    # de la víctima en el cuerpo -- no debería poder cerrarle la sesión.
+    # The attacker is authenticated as themself, but sends the victim's
+    # refresh token in the body -- they shouldn't be able to end the
+    # victim's session.
     logout = await client.post(
         "/api/v1/auth/logout", json={"refresh_token": victim_refresh}, headers=attacker_headers
     )
-    assert logout.status_code == 204  # idempotente: no revela nada, no es un error
+    assert logout.status_code == 204  # idempotent: reveals nothing, not an error
 
     refresh = await client.post("/api/v1/auth/refresh", json={"refresh_token": victim_refresh})
-    assert refresh.status_code == 200  # el token de la víctima sigue vivo
+    assert refresh.status_code == 200  # the victim's token is still alive
 
 
-async def test_logout_requiere_access_token(client: AsyncClient) -> None:
+async def test_logout_requires_an_access_token(client: AsyncClient) -> None:
     response = await client.post("/api/v1/auth/logout", json={"refresh_token": "x"})
 
     assert response.status_code == 401

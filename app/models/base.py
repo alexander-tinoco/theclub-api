@@ -1,15 +1,14 @@
-"""Base declarativa compartida por todos los modelos.
+"""Declarative base shared by every model.
 
-La convención de nombres es lo que hace que `alembic revision --autogenerate`
-funcione de forma estable entre entornos: sin ella, cada índice o constraint
-recibe un nombre generado por Postgres que puede diferir entre bases de
-datos, y Alembic deja de reconocer "esto ya existía" al comparar esquemas.
+The naming convention is what makes `alembic revision --autogenerate` work
+reliably across environments: without it, every index or constraint gets a
+Postgres-generated name that can differ between databases, and Alembic stops
+recognizing "this already existed" when comparing schemas.
 
-`type_annotation_map` hace que todo `Mapped[datetime]` use TIMESTAMPTZ, no el
-`TIMESTAMP` sin zona horaria que SQLAlchemy usa por defecto — es la convención
-que ya declaraba `plan/theclub-api-PLAN.md` ("todos los timestamps en
-TIMESTAMPTZ UTC"), fijada aquí una única vez en vez de repetirla campo a
-campo en cada modelo.
+`type_annotation_map` makes every `Mapped[datetime]` use TIMESTAMPTZ, not the
+timezone-naive `TIMESTAMP` SQLAlchemy defaults to — this is the convention
+`plan/theclub-api-PLAN.md` already declared ("all timestamps in TIMESTAMPTZ
+UTC"), set here once instead of repeating it field by field in every model.
 """
 
 from datetime import datetime
@@ -28,7 +27,7 @@ NAMING_CONVENTION = {
 
 class Base(DeclarativeBase):
     metadata = MetaData(naming_convention=NAMING_CONVENTION)
-    # SQLAlchemy lo lee una sola vez al configurar el mapeo declarativo, no es
-    # un atributo mutable compartido entre instancias — patrón documentado así
-    # por SQLAlchemy mismo.
+    # SQLAlchemy reads this once when configuring the declarative mapping,
+    # it's not a mutable attribute shared across instances — pattern
+    # documented as such by SQLAlchemy itself.
     type_annotation_map = {datetime: DateTime(timezone=True)}  # noqa: RUF012

@@ -1,6 +1,6 @@
-"""Los ejemplos en contracts/events/examples/ deben validar contra dos artefactos
-independientes: el JSON Schema publicado y el modelo Pydantic interno. Si alguno de
-los dos se desincroniza del otro, este test lo detecta.
+"""The examples in contracts/events/examples/ must validate against two
+independent artifacts: the published JSON Schema and the internal Pydantic
+model. If either one drifts from the other, this test catches it.
 """
 
 import json
@@ -64,7 +64,7 @@ CASE_IDS = ["bet-placed", "round-settled", "wallet-transaction"]
 @pytest.mark.parametrize(
     ("schema_filename", "example_filename", "envelope_type"), CASES, ids=CASE_IDS
 )
-def test_ejemplo_valida_contra_json_schema(
+def test_example_validates_against_json_schema(
     registry: Registry, schema_filename: str, example_filename: str, envelope_type: type[BaseModel]
 ) -> None:
     schema = _load_json(EVENTS_DIR / schema_filename)
@@ -78,7 +78,7 @@ def test_ejemplo_valida_contra_json_schema(
 @pytest.mark.parametrize(
     ("schema_filename", "example_filename", "envelope_type"), CASES, ids=CASE_IDS
 )
-def test_ejemplo_valida_contra_modelo_pydantic(
+def test_example_validates_against_pydantic_model(
     registry: Registry, schema_filename: str, example_filename: str, envelope_type: type[BaseModel]
 ) -> None:
     example = _load_json(EVENTS_DIR / "examples" / example_filename)
@@ -90,7 +90,7 @@ def test_ejemplo_valida_contra_modelo_pydantic(
     assert envelope.idempotency_key == example["idempotency_key"]
 
 
-def test_los_tres_event_type_tienen_topic_asignado() -> None:
+def test_all_three_event_types_have_an_assigned_topic() -> None:
     event_types = {
         _load_json(EVENTS_DIR / "examples" / example_filename)["event_type"]
         for _, example_filename, _ in CASES
@@ -99,9 +99,9 @@ def test_los_tres_event_type_tienen_topic_asignado() -> None:
     assert event_types == set(EVENT_TOPIC_SUFFIXES)
 
 
-def test_envelope_rechaza_campos_no_declarados() -> None:
+def test_envelope_rejects_undeclared_fields() -> None:
     example = _load_json(EVENTS_DIR / "examples" / "bet-placed.v1.example.json")
-    example["unexpected_field"] = "no debería estar aquí"
+    example["unexpected_field"] = "should not be here"
 
     with pytest.raises(ValueError, match="unexpected_field"):
         EventEnvelope[BetPlacedData].model_validate(example)

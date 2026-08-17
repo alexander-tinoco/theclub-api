@@ -1,6 +1,6 @@
-"""DoD de la Fase 5: fondos insuficientes, apuesta malformada, límites de
-mesa, reintento con la misma Idempotency-Key (misma respuesta, sin doble
-cobro), y misma clave con cuerpo distinto (409).
+"""Phase 5's DoD: insufficient funds, malformed bet, table limits, a retry
+with the same Idempotency-Key (same response, no double charge), and the
+same key with a different body (409).
 """
 
 import hashlib
@@ -38,7 +38,7 @@ async def _register_and_fund(
 ) -> dict[str, str]:
     email = f"{uuid.uuid4()}@example.com"
     register = await client.post(
-        "/api/v1/auth/register", json={"email": email, "password": "contraseña-larga"}
+        "/api/v1/auth/register", json={"email": email, "password": "a-long-password"}
     )
     headers = {"Authorization": f"Bearer {register.json()['access_token']}"}
     if balance_minor > 0:
@@ -58,7 +58,7 @@ def _bet(
     }
 
 
-async def test_place_bet_exitoso(client: AsyncClient) -> None:
+async def test_place_bet_success(client: AsyncClient) -> None:
     headers = await _register_and_fund(client)
 
     response = await client.post(
@@ -74,7 +74,7 @@ async def test_place_bet_exitoso(client: AsyncClient) -> None:
     assert body["balance_minor"] == 100_000 - 1000 + body["total_payout_minor"]
 
 
-async def test_fondos_insuficientes(client: AsyncClient) -> None:
+async def test_insufficient_funds(client: AsyncClient) -> None:
     headers = await _register_and_fund(client, balance_minor=0)
 
     response = await client.post(
@@ -86,7 +86,7 @@ async def test_fondos_insuficientes(client: AsyncClient) -> None:
     assert response.status_code == 409
 
 
-async def test_apuesta_malformada(client: AsyncClient) -> None:
+async def test_malformed_bet(client: AsyncClient) -> None:
     headers = await _register_and_fund(client)
 
     response = await client.post(
@@ -98,7 +98,7 @@ async def test_apuesta_malformada(client: AsyncClient) -> None:
     assert response.status_code == 422
 
 
-async def test_stake_por_debajo_del_minimo_de_mesa(client: AsyncClient) -> None:
+async def test_stake_below_the_table_minimum(client: AsyncClient) -> None:
     headers = await _register_and_fund(client)
 
     response = await client.post(
@@ -110,7 +110,7 @@ async def test_stake_por_debajo_del_minimo_de_mesa(client: AsyncClient) -> None:
     assert response.status_code == 422
 
 
-async def test_stake_por_encima_del_maximo_de_mesa(client: AsyncClient) -> None:
+async def test_stake_above_the_table_maximum(client: AsyncClient) -> None:
     headers = await _register_and_fund(client)
 
     response = await client.post(
@@ -122,7 +122,7 @@ async def test_stake_por_encima_del_maximo_de_mesa(client: AsyncClient) -> None:
     assert response.status_code == 422
 
 
-async def test_stake_cero_lo_rechaza_ya_en_la_validacion_de_la_peticion(
+async def test_zero_stake_is_rejected_already_at_request_validation(
     client: AsyncClient,
 ) -> None:
     headers = await _register_and_fund(client)
@@ -136,7 +136,9 @@ async def test_stake_cero_lo_rechaza_ya_en_la_validacion_de_la_peticion(
     assert response.status_code == 422
 
 
-async def test_reintento_misma_clave_misma_respuesta_sin_doble_cobro(client: AsyncClient) -> None:
+async def test_retry_with_the_same_key_gets_the_same_response_with_no_double_charge(
+    client: AsyncClient,
+) -> None:
     headers = await _register_and_fund(client)
     key = str(uuid.uuid4())
     payload = _bet()
@@ -156,7 +158,7 @@ async def test_reintento_misma_clave_misma_respuesta_sin_doble_cobro(client: Asy
     assert balance.json()["balance_minor"] == expected
 
 
-async def test_idempotency_key_demasiado_larga_se_rechaza(client: AsyncClient) -> None:
+async def test_an_idempotency_key_that_is_too_long_gets_rejected(client: AsyncClient) -> None:
     headers = await _register_and_fund(client)
 
     response = await client.post(
@@ -168,7 +170,7 @@ async def test_idempotency_key_demasiado_larga_se_rechaza(client: AsyncClient) -
     assert response.status_code == 422
 
 
-async def test_misma_clave_cuerpo_distinto_409(client: AsyncClient) -> None:
+async def test_same_key_different_body_returns_409(client: AsyncClient) -> None:
     headers = await _register_and_fund(client)
     key = str(uuid.uuid4())
 
@@ -186,12 +188,12 @@ async def test_misma_clave_cuerpo_distinto_409(client: AsyncClient) -> None:
     assert response.status_code == 409
 
 
-async def test_fairness_current_y_rotate(client: AsyncClient) -> None:
+async def test_fairness_current_and_rotate(client: AsyncClient) -> None:
     headers = await _register_and_fund(client, balance_minor=0)
 
     current = await client.get("/api/v1/roulette/fairness/current", headers=headers)
     assert current.status_code == 200
-    assert len(current.json()["server_seed_hash"]) == 64  # sha256 en hex
+    assert len(current.json()["server_seed_hash"]) == 64  # sha256 in hex
 
     rotate = await client.post("/api/v1/roulette/fairness/rotate", headers=headers)
     assert rotate.status_code == 200
@@ -204,7 +206,7 @@ async def test_fairness_current_y_rotate(client: AsyncClient) -> None:
     assert new_current.json()["nonce"] == 0
 
 
-async def test_historial_paginado_por_cursor(client: AsyncClient) -> None:
+async def test_history_paginated_by_cursor(client: AsyncClient) -> None:
     headers = await _register_and_fund(client)
     for _ in range(3):
         await client.post(
@@ -225,10 +227,10 @@ async def test_historial_paginado_por_cursor(client: AsyncClient) -> None:
     assert page2.json()["next_cursor"] is None
 
     seen_ids = {item["round_id"] for item in page1.json()["items"] + page2.json()["items"]}
-    assert len(seen_ids) == 3  # sin repetidos ni saltados entre páginas
+    assert len(seen_ids) == 3  # no repeats or skips across pages
 
 
-async def test_rounds_tiene_rate_limit(client: AsyncClient) -> None:
+async def test_rounds_has_a_rate_limit(client: AsyncClient) -> None:
     headers = await _register_and_fund(client, balance_minor=1_000_000)
 
     responses = [

@@ -1,16 +1,16 @@
-"""Correlación de logs por petición/conexión, y líneas canónicas.
+"""Per-request/per-connection log correlation, and canonical lines.
 
-Una línea canónica es *una sola* línea estructurada por petición HTTP (o por
-conexión WS, al cerrarse) con todo lo que importó: quién, qué endpoint, qué
-pasó, cuánto tardó. Sustituye a ir juntando la historia de una petición a
-mano desde varios `logger.info` sueltos y dispersos por el código — acá el
-handler solo llama a `bind_canonical(**campos)` cuando tiene algo que decir
-y el middleware junta todo al final.
+A canonical line is *a single* structured line per HTTP request (or per WS
+connection, on close) with everything that mattered: who, which endpoint,
+what happened, how long it took. It replaces piecing together a request's
+story by hand from several loose, scattered `logger.info` calls — here the
+handler just calls `bind_canonical(**fields)` whenever it has something to
+say, and the middleware assembles everything at the end.
 
-`contextvars` (no un objeto pasado a mano por cada función) porque así
-cualquier capa —ruta, servicio, repositorio— puede enriquecer la línea sin
-que su firma tenga que aceptar un parámetro de contexto que no le interesa
-para nada más que loggear.
+`contextvars` (not an object passed by hand through every function)
+because that way any layer — route, service, repository — can enrich the
+line without its signature having to accept a context parameter it cares
+about for nothing but logging.
 """
 
 import logging
@@ -34,12 +34,12 @@ _canonical_fields_var: ContextVar[dict[str, Any] | None] = ContextVar(
 
 
 def bind_canonical(**fields: Any) -> None:
-    """Añade campos a la línea canónica de la petición/conexión actual.
+    """Adds fields to the current request/connection's canonical line.
 
-    No hace nada (ni levanta) si se llama fuera de una petición real — por
-    ejemplo, un test unitario de un servicio que no pasa por el middleware.
-    El logging de negocio no debería depender de estar montado en un
-    request HTTP para funcionar.
+    Does nothing (doesn't raise) if called outside a real request — for
+    example, a unit test of a service that doesn't go through the
+    middleware. Business logging shouldn't have to be mounted on an HTTP
+    request to work.
     """
     fields_dict = _canonical_fields_var.get()
     if fields_dict is not None:
@@ -47,10 +47,10 @@ def bind_canonical(**fields: Any) -> None:
 
 
 class RequestContextMiddleware:
-    """ASGI puro, no `BaseHTTPMiddleware`: Starlette salta por completo
-    `BaseHTTPMiddleware` para conexiones WebSocket, así que con esa base
-    `/ws` se quedaría sin `request_id` ni línea canónica. Con ASGI puro,
-    ambos scopes ("http" y "websocket") pasan por aquí igual.
+    """Pure ASGI, not `BaseHTTPMiddleware`: Starlette skips
+    `BaseHTTPMiddleware` entirely for WebSocket connections, so with that
+    base `/ws` would end up with no `request_id` or canonical line. With
+    pure ASGI, both scopes ("http" and "websocket") go through here the same way.
     """
 
     def __init__(self, app: ASGIApp) -> None:
@@ -92,11 +92,11 @@ class RequestContextMiddleware:
             }
             if scope["type"] == "http":
                 method = scope["method"]
-                # El path *crudo* de la petición, no un patrón con nombres
-                # (`/rounds/{id}`): ninguna ruta de esta API usa parámetros
-                # de path hoy, así que no explota la cardinalidad de las
-                # métricas — si eso cambiara, esto tendría que resolver la
-                # ruta declarada en vez del path tal cual.
+                # The request's *raw* path, not a named pattern
+                # (`/rounds/{id}`): no route in this API uses path
+                # parameters today, so this doesn't blow up metric
+                # cardinality — if that changed, this would need to resolve
+                # the declared route instead of the raw path.
                 path = scope["path"]
                 line["method"] = method
                 line["path"] = path

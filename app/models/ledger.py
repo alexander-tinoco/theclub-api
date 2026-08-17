@@ -11,16 +11,16 @@ _KINDS_SQL = ", ".join(f"'{kind}'" for kind in LEDGER_KINDS)
 
 
 class LedgerEntry(Base):
-    """Libro append-only: la fuente de verdad del dinero. El balance del wallet
-    es una caché de la suma de estas filas — nunca se actualiza ni se borra una
-    entrada ya escrita (el repositorio no expone update/delete).
+    """Append-only ledger: the source of truth for money. The wallet's
+    balance is a cache of the sum of these rows — an entry, once written,
+    is never updated or deleted (the repository exposes no update/delete).
     """
 
     __tablename__ = "ledger_entries"
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     wallet_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("wallets.id"), index=True)
-    amount_minor: Mapped[int] = mapped_column(BigInteger)  # con signo
+    amount_minor: Mapped[int] = mapped_column(BigInteger)  # signed
     balance_after_minor: Mapped[int] = mapped_column(BigInteger)
     kind: Mapped[str]
     ref_type: Mapped[str | None]

@@ -1,4 +1,4 @@
-"""Casos de uso de provably fair: consultar el seed activo, rotarlo."""
+"""Provably fair use cases: look up the active seed, rotate it."""
 
 import secrets
 import uuid
@@ -11,8 +11,8 @@ from app.domain.fairness import hash_seed, new_server_seed
 from app.repositories.seed_pairs import SeedPairRepository
 from app.services.exceptions import DataIntegrityError
 
-#: 16 bytes -> 32 caracteres hex, suficiente entropía para que el cliente lo
-#: pueda mostrar y verificar sin que sea incómodamente largo.
+#: 16 bytes -> 32 hex characters, enough entropy for the client to show and
+#: verify without being uncomfortably long.
 CLIENT_SEED_BYTES = 16
 
 
@@ -53,7 +53,7 @@ class RotateSeedView:
 async def get_current_seed(session: AsyncSession, *, user_id: uuid.UUID) -> CurrentSeedView:
     seed_pair = await SeedPairRepository(session).get_active_by_user_id(user_id)
     if seed_pair is None:
-        raise DataIntegrityError(f"user {user_id} sin seed pair activo")
+        raise DataIntegrityError(f"user {user_id} has no active seed pair")
     return CurrentSeedView(
         server_seed_hash=seed_pair.server_seed_hash,
         client_seed=seed_pair.client_seed,
@@ -62,14 +62,15 @@ async def get_current_seed(session: AsyncSession, *, user_id: uuid.UUID) -> Curr
 
 
 async def rotate_seed(session: AsyncSession, *, user_id: uuid.UUID) -> RotateSeedView:
-    """Revela el server_seed activo (ya no se puede volver a usar) y activa uno
-    nuevo. El cliente puede verificar `sha256(revealed_server_seed) ==
-    revealed_server_seed_hash` y recalcular cada giro que hizo con el anterior.
+    """Reveals the active server_seed (it can no longer be used) and
+    activates a new one. The client can verify
+    `sha256(revealed_server_seed) == revealed_server_seed_hash` and
+    recompute every spin they made with the previous one.
     """
     repo = SeedPairRepository(session)
     current = await repo.get_active_by_user_id(user_id)
     if current is None:
-        raise DataIntegrityError(f"user {user_id} sin seed pair activo")
+        raise DataIntegrityError(f"user {user_id} has no active seed pair")
 
     await repo.reveal_and_deactivate(current.id)
 

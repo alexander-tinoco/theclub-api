@@ -9,7 +9,7 @@ from app.infra.logging import JsonFormatter
 pytestmark = pytest.mark.unit
 
 
-def _make_record(*, msg: str = "algo pasó", exc_info: bool = False) -> logging.LogRecord:
+def _make_record(*, msg: str = "something happened", exc_info: bool = False) -> logging.LogRecord:
     exc_info_arg = None
     if exc_info:
         try:
@@ -29,18 +29,18 @@ def _make_record(*, msg: str = "algo pasó", exc_info: bool = False) -> logging.
     )
 
 
-def test_linea_normal_sin_contexto_no_incluye_request_id_ni_user_id() -> None:
+def test_a_normal_line_with_no_context_includes_no_request_id_or_user_id() -> None:
     formatter = JsonFormatter()
 
     line = json.loads(formatter.format(_make_record()))
 
-    assert line["message"] == "algo pasó"
+    assert line["message"] == "something happened"
     assert line["logger"] == "app.test"
     assert "request_id" not in line
     assert "user_id" not in line
 
 
-def test_linea_normal_incluye_request_id_y_user_id_si_estan_en_contexto() -> None:
+def test_a_normal_line_includes_request_id_and_user_id_if_theyre_in_context() -> None:
     req_token = request_id_var.set("req-123")
     user_token = user_id_var.set("user-456")
     try:
@@ -54,7 +54,7 @@ def test_linea_normal_incluye_request_id_y_user_id_si_estan_en_contexto() -> Non
     assert line["user_id"] == "user-456"
 
 
-def test_linea_con_excepcion_incluye_el_traceback() -> None:
+def test_a_line_with_an_exception_includes_the_traceback() -> None:
     formatter = JsonFormatter()
 
     line = json.loads(formatter.format(_make_record(exc_info=True)))
@@ -63,7 +63,7 @@ def test_linea_con_excepcion_incluye_el_traceback() -> None:
     assert "boom" in line["exception"]
 
 
-def test_linea_canonica_usa_el_dict_de_extra_tal_cual() -> None:
+def test_the_canonical_line_uses_the_extra_dict_as_is() -> None:
     formatter = JsonFormatter()
     record = _make_record(msg="request_completed")
     record.canonical = {"request_id": "req-1", "user_id": None, "status_code": 201}
@@ -73,5 +73,5 @@ def test_linea_canonica_usa_el_dict_de_extra_tal_cual() -> None:
     assert line["event"] == "request_completed"
     assert line["status_code"] == 201
     assert line["request_id"] == "req-1"
-    # el campo "logger" es del camino normal, no de la línea canónica
+    # the "logger" field belongs to the normal path, not the canonical line
     assert "logger" not in line

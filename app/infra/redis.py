@@ -1,8 +1,8 @@
-"""Cliente de Redis: backend del rate limiting global (slowapi) y del de
-`/ws`. A diferencia de `AIOKafkaProducer`, `redis.asyncio.Redis` no exige un
-event loop corriendo para construirse — solo para las operaciones que hacen
-IO real — así que este cliente se crea en `create_app()`, no en el
-`lifespan`, igual que el engine de Postgres.
+"""Redis client: backend for both the global rate limiter (slowapi) and the
+`/ws` one. Unlike `AIOKafkaProducer`, `redis.asyncio.Redis` doesn't require
+a running event loop to be constructed — only for the operations that do
+real IO — so this client is created in `create_app()`, not in the
+`lifespan`, just like the Postgres engine.
 """
 
 from redis.asyncio import Redis
@@ -11,8 +11,8 @@ from app.config import Settings
 
 
 async def check_redis(redis: Redis) -> None:
-    """Check de `/ready`: si Redis no responde, `ping` lanza — justo lo que
-    `/ready` necesita para reportar `fail`.
+    """`/ready` check: if Redis doesn't respond, `ping` raises — exactly
+    what `/ready` needs to report `fail`.
     """
     await redis.ping()
 

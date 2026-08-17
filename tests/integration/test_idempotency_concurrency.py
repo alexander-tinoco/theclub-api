@@ -1,7 +1,7 @@
-"""El pedido explícito de esta fase: cerrar del todo la carrera de
-idempotencia. N peticiones verdaderamente concurrentes (mismo `asyncio.gather`,
-no secuenciales) con la misma Idempotency-Key nunca ejecutan el negocio más
-de una vez -- ni el débito, ni la ronda, se duplican.
+"""This phase's explicit ask: fully close the idempotency race. N truly
+concurrent requests (same `asyncio.gather`, not sequential) with the same
+Idempotency-Key never run the business logic more than once -- neither the
+debit nor the round gets duplicated.
 """
 
 import asyncio
@@ -41,12 +41,12 @@ async def client(integration_settings: Settings) -> AsyncIterator[AsyncClient]:
             yield c
 
 
-async def test_rondas_concurrentes_identicas_solo_ejecutan_el_negocio_una_vez(
+async def test_identical_concurrent_rounds_only_run_the_business_logic_once(
     client: AsyncClient, db_session: AsyncSession
 ) -> None:
     email = f"{uuid.uuid4()}@example.com"
     register = await client.post(
-        "/api/v1/auth/register", json={"email": email, "password": "contraseña-larga"}
+        "/api/v1/auth/register", json={"email": email, "password": "a-long-password"}
     )
     headers = {"Authorization": f"Bearer {register.json()['access_token']}"}
     await client.post(
@@ -72,9 +72,8 @@ async def test_rondas_concurrentes_identicas_solo_ejecutan_el_negocio_una_vez(
     assert all(r.status_code in (201, 409) for r in responses)
     successful_bodies = [r.json() for r in responses if r.status_code == 201]
     assert len(successful_bodies) >= 1
-    # Todas las que "ganaron" ven exactamente la misma respuesta -- son la
-    # misma ejecución cacheada, no ejecuciones distintas que casualmente
-    # coincidieron.
+    # Every request that "won" sees exactly the same response -- it's the
+    # same cached execution, not separate executions that happened to match.
     assert all(body == successful_bodies[0] for body in successful_bodies)
 
     user = await UserRepository(db_session).get_by_email(email)
@@ -85,9 +84,7 @@ async def test_rondas_concurrentes_identicas_solo_ejecutan_el_negocio_una_vez(
     rounds = (
         (await db_session.execute(select(Round).where(Round.user_id == user.id))).scalars().all()
     )
-    assert len(rounds) == 1, (
-        "10 peticiones concurrentes con la misma clave crearon más de una ronda"
-    )
+    assert len(rounds) == 1, "10 concurrent requests with the same key created more than one round"
 
     stake_entries = (
         (
@@ -100,7 +97,7 @@ async def test_rondas_concurrentes_identicas_solo_ejecutan_el_negocio_una_vez(
         .scalars()
         .all()
     )
-    assert len(stake_entries) == 1, "el stake se debitó más de una vez bajo concurrencia"
+    assert len(stake_entries) == 1, "the stake was debited more than once under concurrency"
 
     balance = await client.get("/api/v1/wallet/balance", headers=headers)
     round_body = successful_bodies[0]
@@ -108,12 +105,12 @@ async def test_rondas_concurrentes_identicas_solo_ejecutan_el_negocio_una_vez(
     assert balance.json()["balance_minor"] == expected_balance
 
 
-async def test_depositos_concurrentes_identicos_solo_acreditan_una_vez(
+async def test_identical_concurrent_deposits_only_credit_once(
     client: AsyncClient, db_session: AsyncSession
 ) -> None:
     email = f"{uuid.uuid4()}@example.com"
     register = await client.post(
-        "/api/v1/auth/register", json={"email": email, "password": "contraseña-larga"}
+        "/api/v1/auth/register", json={"email": email, "password": "a-long-password"}
     )
     headers = {"Authorization": f"Bearer {register.json()['access_token']}"}
 

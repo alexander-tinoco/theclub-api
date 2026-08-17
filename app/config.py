@@ -1,9 +1,9 @@
-"""Configuración de la aplicación: 12-factor, todo por variables de entorno.
+"""Application configuration: 12-factor, everything via environment variables.
 
-Aquí están declaradas ya las variables que consumirán las fases posteriores
-(base de datos, Kafka, JWT, límites de mesa) aunque la Fase 0 solo use unas
-pocas. El objetivo es que ni `.env.example` ni `docker-compose.yml` tengan que
-cambiar en cada fase.
+The variables consumed by later phases (database, Kafka, JWT, table limits)
+are already declared here even though Phase 0 only uses a few of them. The
+goal is that neither `.env.example` nor `docker-compose.yml` has to change
+in every phase.
 """
 
 from functools import lru_cache
@@ -12,10 +12,10 @@ from typing import Annotated, Any, Literal, Self
 from pydantic import BeforeValidator, Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-# Valor centinela: arrancar en staging/prod con este secreto es un error fatal.
-# >= 32 bytes a propósito: por debajo de eso, PyJWT emite InsecureKeyLengthWarning
-# en cada HS256 firmado, incluso en local/test.
-PLACEHOLDER_SECRET = "cambiame-en-produccion-000000000"  # noqa: S105
+# Sentinel value: starting up in staging/prod with this secret is a fatal error.
+# >= 32 bytes on purpose: below that, PyJWT emits InsecureKeyLengthWarning on
+# every HS256 signature, even in local/test.
+PLACEHOLDER_SECRET = "change-me-in-production-000000000"  # noqa: S105
 
 Environment = Literal["local", "test", "staging", "prod"]
 LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
@@ -23,7 +23,7 @@ SecurityProtocol = Literal["PLAINTEXT", "SSL", "SASL_PLAINTEXT", "SASL_SSL"]
 
 
 def _split_csv(value: Any) -> Any:
-    """Acepta `a,b,c` además de la lista JSON que pydantic-settings espera."""
+    """Accepts `a,b,c` in addition to the JSON list pydantic-settings expects."""
     if isinstance(value, str) and not value.strip().startswith("["):
         return [item.strip() for item in value.split(",") if item.strip()]
     return value
@@ -41,7 +41,7 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    # --- aplicación ---------------------------------------------------------
+    # --- application ---------------------------------------------------------
     APP_ENV: Environment = "local"
     APP_NAME: str = "theclub-api"
     APP_VERSION: str = "0.1.0"
@@ -49,19 +49,19 @@ class Settings(BaseSettings):
     API_V1_PREFIX: str = "/api/v1"
     CORS_ORIGINS: CsvList = ["http://localhost:3000"]
 
-    # --- base de datos (Fase 3) ---------------------------------------------
+    # --- database (Phase 3) ---------------------------------------------
     DATABASE_URL: str = "postgresql+psycopg://theclub:theclub@localhost:5432/theclub"
     DB_POOL_SIZE: int = Field(default=5, ge=1)
 
-    # --- Redis (Fase 8) -------------------------------------------------------
-    # Estado del rate limiting (global y de /ws): en memoria del proceso se
-    # pierde en cada redeploy — un atacante que sincronizara sus intentos con
-    # uno lo esquivaría. Con Redis, el estado sobrevive al proceso que lo usa.
+    # --- Redis (Phase 8) -------------------------------------------------------
+    # Rate limiting state (global and /ws): in-process memory is lost on every
+    # redeploy — an attacker who synced their attempts with one would slip
+    # past it. With Redis, the state survives the process that uses it.
     REDIS_URL: str = "redis://localhost:6389/0"
 
-    # --- Kafka / Redpanda (Fase 6) ------------------------------------------
-    # Estos cinco campos son los que permiten pasar de Redpanda local a
-    # Confluent Cloud cambiando solo el .env, sin tocar código.
+    # --- Kafka / Redpanda (Phase 6) ------------------------------------------
+    # These five fields are what let you move from local Redpanda to
+    # Confluent Cloud by changing only the .env, without touching code.
     KAFKA_BOOTSTRAP_SERVERS: str = "localhost:19092"
     KAFKA_SECURITY_PROTOCOL: SecurityProtocol = "PLAINTEXT"
     KAFKA_SASL_MECHANISM: str | None = None
@@ -69,20 +69,20 @@ class Settings(BaseSettings):
     KAFKA_SASL_PASSWORD: SecretStr | None = None
     KAFKA_TOPIC_PREFIX: str = "theclub"
 
-    # --- autenticación (Fase 4) ---------------------------------------------
+    # --- authentication (Phase 4) ---------------------------------------------
     JWT_SECRET: SecretStr = SecretStr(PLACEHOLDER_SECRET)
     JWT_ALGORITHM: str = "HS256"
     ACCESS_TOKEN_TTL_SECONDS: int = Field(default=900, ge=60)
     REFRESH_TOKEN_TTL_SECONDS: int = Field(default=60 * 60 * 24 * 14, ge=300)
-    # Rotación de JWT_SECRET (Fase 8): al rotar, el secreto viejo pasa aquí.
-    # Firmar usa solo JWT_SECRET; verificar prueba JWT_SECRET y luego estos,
-    # en orden, así un access token emitido segundos antes de rotar no
-    # invalida sesiones activas — solo hace falta mantener un secreto aquí
-    # mientras existan tokens sin caducar firmados con él (como mucho
-    # ACCESS_TOKEN_TTL_SECONDS después de sacarlo de uso).
+    # JWT_SECRET rotation (Phase 8): the old secret moves here when rotated.
+    # Signing only ever uses JWT_SECRET; verification tries JWT_SECRET and
+    # then these, in order, so an access token issued seconds before a
+    # rotation doesn't invalidate active sessions — a secret only needs to
+    # stay here while unexpired tokens signed with it still exist (at most
+    # ACCESS_TOKEN_TTL_SECONDS after it's retired).
     JWT_PREVIOUS_SECRETS: CsvSecretList = []
 
-    # --- juego y outbox (Fases 5 y 6) ---------------------------------------
+    # --- game and outbox (Phases 5 and 6) ---------------------------------------
     OUTBOX_POLL_INTERVAL_MS: int = Field(default=500, ge=50)
     OUTBOX_RETENTION_HOURS: int = Field(default=24 * 7, ge=1)
     OUTBOX_CLEANUP_INTERVAL_S: int = Field(default=3600, ge=60)
@@ -90,14 +90,14 @@ class Settings(BaseSettings):
     TABLE_MAX_BET_MINOR: int = Field(default=500_000, ge=1)
     IDEMPOTENCY_KEY_TTL_HOURS: int = Field(default=24, ge=1)
 
-    # --- WebSocket (Fase 7) --------------------------------------------------
+    # --- WebSocket (Phase 7) --------------------------------------------------
     WS_MAX_CONNECTIONS: int = Field(default=1000, ge=1)
     WS_HEARTBEAT_INTERVAL_S: float = Field(default=20.0, gt=0)
     WS_HEARTBEAT_TIMEOUT_S: float = Field(default=45.0, gt=0)
     WS_CONNECT_RATE_LIMIT_ATTEMPTS: int = Field(default=10, ge=1)
     WS_CONNECT_RATE_LIMIT_WINDOW_S: float = Field(default=60.0, gt=0)
 
-    # --- endurecimiento (Fase 8) ---------------------------------------------
+    # --- hardening (Phase 8) ---------------------------------------------------
     MAX_REQUEST_BODY_BYTES: int = Field(default=1_000_000, ge=1024)
 
     @property
@@ -107,7 +107,7 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def _check_bet_limits(self) -> Self:
         if self.TABLE_MIN_BET_MINOR > self.TABLE_MAX_BET_MINOR:
-            raise ValueError("TABLE_MIN_BET_MINOR no puede superar a TABLE_MAX_BET_MINOR")
+            raise ValueError("TABLE_MIN_BET_MINOR cannot exceed TABLE_MAX_BET_MINOR")
         return self
 
     @model_validator(mode="after")
@@ -115,18 +115,18 @@ class Settings(BaseSettings):
         needs_sasl = self.KAFKA_SECURITY_PROTOCOL.startswith("SASL")
         if needs_sasl and not (self.KAFKA_SASL_USERNAME and self.KAFKA_SASL_PASSWORD):
             raise ValueError(
-                f"KAFKA_SECURITY_PROTOCOL={self.KAFKA_SECURITY_PROTOCOL} exige "
-                "KAFKA_SASL_USERNAME y KAFKA_SASL_PASSWORD"
+                f"KAFKA_SECURITY_PROTOCOL={self.KAFKA_SECURITY_PROTOCOL} requires "
+                "KAFKA_SASL_USERNAME and KAFKA_SASL_PASSWORD"
             )
         return self
 
     @model_validator(mode="after")
     def _check_production_secrets(self) -> Self:
-        """En staging/prod la app no arranca con secretos de ejemplo o débiles.
+        """In staging/prod the app doesn't start up with example or weak secrets.
 
-        Incluye `JWT_PREVIOUS_SECRETS`: quien lo conozca puede forjar un
-        token que `decode_access_token` acepte igual que con el actual — no
-        es un secreto "solo de lectura", así que exige la misma fuerza.
+        Includes `JWT_PREVIOUS_SECRETS`: whoever knows it can forge a token
+        that `decode_access_token` accepts just like the current one — it's
+        not a "read-only" secret, so it demands the same strength.
         """
         if not self.is_production:
             return self
@@ -137,30 +137,30 @@ class Settings(BaseSettings):
             secret = secret_value.get_secret_value()
             if secret == PLACEHOLDER_SECRET:
                 raise ValueError(
-                    f"JWT_SECRET/JWT_PREVIOUS_SECRETS sigue con el valor de ejemplo "
-                    f"con APP_ENV={self.APP_ENV}"
+                    f"JWT_SECRET/JWT_PREVIOUS_SECRETS is still the example value "
+                    f"with APP_ENV={self.APP_ENV}"
                 )
             if len(secret) < 32:
                 raise ValueError(
-                    "JWT_SECRET y JWT_PREVIOUS_SECRETS deben tener al menos 32 "
-                    "caracteres fuera de local/test"
+                    "JWT_SECRET and JWT_PREVIOUS_SECRETS must be at least 32 "
+                    "characters outside local/test"
                 )
         return self
 
     @model_validator(mode="after")
     def _check_cors_wildcard_in_production(self) -> Self:
-        """`CORSMiddleware` va con `allow_credentials=True` — un origen
-        comodín junto con credenciales es justo la combinación que los
-        navegadores rechazan y que, si por lo que sea "funcionara", sería
-        un agujero real. Mejor que la app no arranque a que sea un CORS
-        roto (o abierto) descubierto en producción.
+        """`CORSMiddleware` runs with `allow_credentials=True` — a wildcard
+        origin combined with credentials is exactly the combination browsers
+        already reject, and if it somehow "worked" it would be a real hole.
+        Better for the app to refuse to start than to ship a broken (or
+        wide-open) CORS setup discovered in production.
         """
         if self.is_production and "*" in self.CORS_ORIGINS:
-            raise ValueError("CORS_ORIGINS no puede ser '*' fuera de local/test")
+            raise ValueError("CORS_ORIGINS cannot be '*' outside local/test")
         return self
 
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
-    """Instancia única, cacheada. Usable como dependencia de FastAPI."""
+    """Single, cached instance. Usable as a FastAPI dependency."""
     return Settings()

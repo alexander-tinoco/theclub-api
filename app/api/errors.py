@@ -1,8 +1,7 @@
-"""Traduce excepciones de servicio a respuestas HTTP.
+"""Translates service exceptions into HTTP responses.
 
-Las rutas dejan que estas excepciones se propaguen tal cual — no hace falta
-un try/except en cada endpoint; FastAPI las intercepta con los handlers
-registrados aquí.
+Routes let these exceptions propagate as-is — no try/except needed in each
+endpoint; FastAPI intercepts them with the handlers registered here.
 """
 
 import logging
@@ -30,21 +29,21 @@ logger = logging.getLogger(__name__)
 ExceptionHandler = Callable[[Request, Exception], Awaitable[Response]]
 
 _ERROR_MAP: dict[type[Exception], tuple[int, str]] = {
-    EmailAlreadyExistsError: (status.HTTP_409_CONFLICT, "el email ya está registrado"),
-    InvalidCredentialsError: (status.HTTP_401_UNAUTHORIZED, "credenciales inválidas"),
-    UserSuspendedError: (status.HTTP_403_FORBIDDEN, "la cuenta está suspendida"),
-    TokenExpiredError: (status.HTTP_401_UNAUTHORIZED, "el token ha caducado"),
-    InvalidTokenError: (status.HTTP_401_UNAUTHORIZED, "token inválido"),
-    RefreshTokenReusedError: (status.HTTP_401_UNAUTHORIZED, "sesión revocada"),
-    InvalidBetError: (status.HTTP_422_UNPROCESSABLE_CONTENT, "apuesta inválida"),
-    InsufficientFundsError: (status.HTTP_409_CONFLICT, "saldo insuficiente"),
+    EmailAlreadyExistsError: (status.HTTP_409_CONFLICT, "email already registered"),
+    InvalidCredentialsError: (status.HTTP_401_UNAUTHORIZED, "invalid credentials"),
+    UserSuspendedError: (status.HTTP_403_FORBIDDEN, "account is suspended"),
+    TokenExpiredError: (status.HTTP_401_UNAUTHORIZED, "token has expired"),
+    InvalidTokenError: (status.HTTP_401_UNAUTHORIZED, "invalid token"),
+    RefreshTokenReusedError: (status.HTTP_401_UNAUTHORIZED, "session revoked"),
+    InvalidBetError: (status.HTTP_422_UNPROCESSABLE_CONTENT, "invalid bet"),
+    InsufficientFundsError: (status.HTTP_409_CONFLICT, "insufficient funds"),
     IdempotencyKeyConflictError: (
         status.HTTP_409_CONFLICT,
-        "Idempotency-Key ya usada con un cuerpo de petición distinto",
+        "Idempotency-Key already used with a different request body",
     ),
     IdempotencyInProgressError: (
         status.HTTP_409_CONFLICT,
-        "ya hay una petición con esta misma Idempotency-Key en curso",
+        "a request with this same Idempotency-Key is already in progress",
     ),
 }
 
@@ -57,41 +56,41 @@ def _make_handler(status_code: int, detail: str) -> ExceptionHandler:
 
 
 async def _handle_data_integrity_error(request: Request, exc: Exception) -> Response:
-    # A diferencia del resto del mapa, esto nunca lo provoca el cliente — es
-    # un invariante de negocio roto en algún otro sitio del sistema. Se
-    # registra con nivel error para que no pase desapercibido en logs.
-    logger.error("DataIntegrityError en %s: %s", request.url.path, exc)
+    # Unlike the rest of the map, the client never triggers this — it's a
+    # broken business invariant somewhere else in the system. Logged at
+    # error level so it doesn't go unnoticed.
+    logger.error("DataIntegrityError at %s: %s", request.url.path, exc)
     return JSONResponse(
-        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, content={"detail": "error interno"}
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, content={"detail": "internal error"}
     )
 
 
 async def _handle_unexpected_error(request: Request, exc: Exception) -> Response:
-    """Red de seguridad final: cualquier excepción que no esté en `_ERROR_MAP`
-    es, por definición, un bug de verdad — no algo que el cliente pudo
-    provocar a propósito. Se registra con el stack trace completo (nivel
-    ERROR) y la respuesta nunca incluye `str(exc)` ni nada de la excepción:
-    solo un detail genérico, para no filtrar internals.
+    """Final safety net: any exception not in `_ERROR_MAP` is, by
+    definition, a real bug — not something the client could have triggered
+    on purpose. Logged with the full stack trace (ERROR level), and the
+    response never includes `str(exc)` or anything about the exception:
+    just a generic detail, to avoid leaking internals.
     """
-    logger.error("Excepción no manejada en %s", request.url.path, exc_info=exc)
+    logger.error("Unhandled exception at %s", request.url.path, exc_info=exc)
     return JSONResponse(
-        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, content={"detail": "error interno"}
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, content={"detail": "internal error"}
     )
 
 
 class UnhandledExceptionMiddleware:
-    """Atrapa `Exception` como middleware ASGI, no como
+    """Catches `Exception` as ASGI middleware, not as
     `app.add_exception_handler(Exception, ...)`.
 
-    Starlette envía los handlers registrados para la clave literal
-    `Exception` (o `500`) a `ServerErrorMiddleware` — la capa *más externa*
-    de todas, por fuera de `CORSMiddleware` y de `RequestContextMiddleware`.
-    Una respuesta generada ahí nunca lleva los headers de CORS ni
-    `X-Request-ID`, y la línea canónica de esa petición queda con
-    `status_code: null`, porque el `send` que la produce nunca pasa por el
-    `send_wrapper` de ninguno de los dos. Atrapar la excepción aquí, en la
-    capa *más interna* (pegada al router, añadida después de `CORSMiddleware`
-    en `create_app()`), hace que ambas capas sí vean la respuesta real.
+    Starlette routes handlers registered for the literal `Exception` (or
+    `500`) key to `ServerErrorMiddleware` — the *outermost* layer of all,
+    outside `CORSMiddleware` and `RequestContextMiddleware`. A response
+    generated there never carries CORS headers or `X-Request-ID`, and that
+    request's canonical log line ends up with `status_code: null`, because
+    the `send` that produces it never goes through either one's
+    `send_wrapper`. Catching the exception here, at the *innermost* layer
+    (right next to the router, added after `CORSMiddleware` in
+    `create_app()`), makes both outer layers see the real response.
     """
 
     def __init__(self, app: ASGIApp) -> None:
@@ -114,9 +113,9 @@ class UnhandledExceptionMiddleware:
             await self.app(scope, receive, send_wrapper)
         except Exception as exc:
             if response_started:
-                # Ya se mandó algo — inyectar una respuesta nueva encima
-                # rompería el protocolo ASGI. No queda otra que relanzar,
-                # igual que hace Starlette en el mismo caso.
+                # Something was already sent — injecting a new response on
+                # top would break the ASGI protocol. Nothing to do but
+                # re-raise, same as Starlette does in that case.
                 raise
             response = await _handle_unexpected_error(Request(scope, receive), exc)
             await response(scope, receive, send)

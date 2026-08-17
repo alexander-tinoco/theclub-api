@@ -1,9 +1,9 @@
-"""Fixtures de los tests de integración: requieren Postgres real (`make up`).
+"""Fixtures for the integration tests: require a real Postgres (`make up`).
 
-La migración se aplica una vez por sesión de pytest. Cada test limpia sus
-propias tablas al terminar con DELETE, no con el rollback de una transacción
-envolvente — el test de concurrencia necesita commits reales, visibles desde
-conexiones distintas, y una transacción envolvente sin commit se lo impediría.
+The migration is applied once per pytest session. Each test cleans up its
+own tables at the end with DELETE, not with an enclosing transaction's
+rollback — the concurrency test needs real commits, visible from separate
+connections, which an enclosing uncommitted transaction would prevent.
 """
 
 from collections.abc import AsyncIterator
@@ -70,14 +70,14 @@ async def _clean_tables(engine: AsyncEngine) -> AsyncIterator[None]:
 
 @pytest.fixture(autouse=True)
 def _reset_rate_limiters(integration_settings: Settings) -> None:
-    """Ambos limitadores viven en el mismo Redis, entre procesos y entre
-    tests: sin esto, un test que agota su cupo deja el contador cargado
-    para el siguiente que reutilice la misma IP/clave dentro de la misma
-    ventana real de tiempo.
+    """Both limiters live in the same Redis, across processes and across
+    tests: without this, a test that exhausts its quota leaves the counter
+    loaded for the next one that reuses the same IP/key within the same
+    real time window.
 
-    `limiter.reset()` (slowapi) solo borra las claves bajo su propio
-    prefijo — el `WsConnectRateLimiter` de `/ws` vive bajo el suyo
-    (`ws-connect-rl:`) y necesita su propia limpieza aparte.
+    `limiter.reset()` (slowapi) only clears keys under its own prefix —
+    `/ws`'s `WsConnectRateLimiter` lives under its own (`ws-connect-rl:`)
+    and needs its own separate cleanup.
     """
     limiter.reset()
     client = redis.Redis.from_url(integration_settings.REDIS_URL)

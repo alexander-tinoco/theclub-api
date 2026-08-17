@@ -1,16 +1,16 @@
-"""GET /ws — notificaciones en vivo: `round.settled` y `balance.updated`.
+"""GET /ws — live notifications: `round.settled` and `balance.updated`.
 
-Autenticación por query param (`?token=<jwt>`) porque el navegador no deja
-mandar el header `Authorization` en el handshake de un WebSocket. Es un
-trade-off real y documentado, no un descuido: el token puede acabar en logs
-de acceso de un proxy intermedio si no se filtra explícitamente — aceptable
-para este MVP, a reconsiderar (mensaje de auth como primer frame, en vez de
-query param) si esto se produce de verdad alguna vez.
+Authentication via query param (`?token=<jwt>`) because the browser won't
+let you send the `Authorization` header during a WebSocket handshake. It's
+a real, documented trade-off, not an oversight: the token can end up in an
+intermediate proxy's access logs if it isn't explicitly filtered out —
+acceptable for this MVP, worth reconsidering (an auth message as the first
+frame, instead of a query param) if this ever becomes a real concern.
 
-Los endpoints WS de FastAPI no pueden reutilizar `SessionDep`/`SettingsDep`
-tal cual: esas dependencias declaran un parámetro `Request`, y en una ruta
-WebSocket eso falla en tiempo de ejecución (`request` no existe en ese
-scope). Por eso aquí se lee todo de `websocket.app.state` directamente.
+FastAPI's WS endpoints can't reuse `SessionDep`/`SettingsDep` as-is: those
+dependencies declare a `Request` parameter, and on a WebSocket route that
+fails at runtime (`request` doesn't exist in that scope). That's why
+everything here is read straight from `websocket.app.state`.
 """
 
 import asyncio
@@ -33,19 +33,20 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["ws"])
 
-#: Códigos de cierre en el rango de aplicación (4000-4999, libre para uso
-#: propio según RFC 6455) — el cliente los distingue de un cierre normal.
+#: Close codes in the application range (4000-4999, free for private use
+#: per RFC 6455) — the client tells them apart from a normal close.
 CLOSE_UNAUTHORIZED = 4401
-#: Cubre dos límites distintos (demasiadas conexiones activas, demasiados
-#: intentos de conexión en la ventana) — el cliente no necesita distinguir
-#: cuál de los dos disparó el cierre, en ambos casos la respuesta es esperar.
+#: Covers two different limits (too many active connections, too many
+#: connection attempts in the window) — the client doesn't need to
+#: distinguish which of the two triggered the close, in both cases the
+#: response is to wait.
 CLOSE_TOO_MANY_CONNECTIONS = 4429
 
 
 async def _authenticate(websocket: WebSocket) -> uuid.UUID | None:
-    """None si el token falta, es inválido, expiró, o el usuario no existe
-    o está suspendido — todos los casos cierran igual (4401), sin filtrar
-    cuál fue el motivo exacto.
+    """None if the token is missing, invalid, expired, or the user doesn't
+    exist or is suspended — every case closes the same way (4401), without
+    leaking which exact reason it was.
     """
     settings: Settings = websocket.app.state.settings
     token = websocket.query_params.get("token")
@@ -60,10 +61,11 @@ async def _authenticate(websocket: WebSocket) -> uuid.UUID | None:
             previous_secrets=[s.get_secret_value() for s in settings.JWT_PREVIOUS_SECRETS],
         )
     except (InvalidTokenError, TokenExpiredError) as exc:
-        # `except (A, B):` sin nombre dispara un bug real de `ruff format`
-        # (reescribe a `except A, B:`, sintaxis de Python 2) en la versión
-        # instalada — dejar el nombre lo evita, y de paso sirve para loggear.
-        logger.debug("Token de WS rechazado: %s", exc)
+        # `except (A, B):` with no name triggers a real bug in the
+        # installed version of `ruff format` (it rewrites it to
+        # `except A, B:`, Python 2 syntax) — keeping the name avoids it,
+        # and doubles as something to log.
+        logger.debug("WS token rejected: %s", exc)
         return None
 
     session_factory = websocket.app.state.db_session_factory
@@ -77,9 +79,9 @@ async def _authenticate(websocket: WebSocket) -> uuid.UUID | None:
 async def _sender(
     websocket: WebSocket, queue: asyncio.Queue[dict[str, Any]], *, interval_s: float
 ) -> None:
-    """Reenvía cada mensaje publicado para este usuario. Si no hay nada que
-    reenviar dentro de `interval_s`, manda un ping — así el heartbeat no
-    compite con los mensajes reales, se intercalan en el mismo bucle.
+    """Forwards every message published for this user. If there's nothing
+    to forward within `interval_s`, sends a ping — that way the heartbeat
+    doesn't compete with real messages, they're interleaved in the same loop.
     """
     while True:
         try:
@@ -91,10 +93,11 @@ async def _sender(
 
 
 async def _receiver(websocket: WebSocket, *, timeout_s: float) -> None:
-    """Cualquier frame del cliente (típicamente `{"type":"pong"}`) cuenta
-    como señal de vida. Si no llega ninguno en `timeout_s`, se asume una
-    conexión zombie (p. ej. un móvil que se durmió sin cerrar el TCP) y se
-    deja que la excepción termine esta tarea — el endpoint cierra al notarlo.
+    """Any frame from the client (typically `{"type":"pong"}`) counts as a
+    sign of life. If none arrives within `timeout_s`, a zombie connection is
+    assumed (e.g. a phone that fell asleep without closing the TCP
+    connection) and the exception is left to end this task — the endpoint
+    closes once it notices.
     """
     while True:
         await asyncio.wait_for(websocket.receive_json(), timeout=timeout_s)
@@ -108,9 +111,9 @@ async def ws_endpoint(websocket: WebSocket) -> None:
     connect_rate_limiter: WsConnectRateLimiter = websocket.app.state.ws_connect_rate_limiter
 
     client_ip = websocket.client.host if websocket.client else "unknown"
-    # Antes que nada, ni siquiera decodificar el token: `slowapi` no cubre
-    # este endpoint (ver el docstring de `ws/rate_limit.py`), así que un
-    # bucle de reconexión con un token roto no debe ni llegar a tocar la DB.
+    # Before anything else, not even decoding the token: `slowapi` doesn't
+    # cover this endpoint (see the docstring in `ws/rate_limit.py`), so a
+    # reconnect loop with a broken token shouldn't even reach the DB.
     if not await connect_rate_limiter.allow(client_ip):
         await websocket.close(code=CLOSE_TOO_MANY_CONNECTIONS)
         return
@@ -128,11 +131,11 @@ async def ws_endpoint(websocket: WebSocket) -> None:
 
     close_reason = "disconnected_or_shutdown"
     try:
-        # `accept()` va *dentro* del try a propósito: si el handshake falla
-        # a medio camino (el cliente cierra la pestaña, un proxy corta la
-        # conexión), el cupo reservado por `try_register` de todos modos se
-        # libera en el `finally` — si no, cada handshake fallido deja un
-        # hueco fantasma en `WS_MAX_CONNECTIONS` para siempre.
+        # `accept()` goes *inside* the try on purpose: if the handshake
+        # fails partway through (the client closes the tab, a proxy cuts
+        # the connection), the slot reserved by `try_register` still gets
+        # freed in the `finally` — otherwise, every failed handshake would
+        # leave a phantom hole in `WS_MAX_CONNECTIONS` forever.
         await websocket.accept()
         async with broadcaster.subscribe(user_id) as queue:
             sender = asyncio.create_task(
@@ -145,9 +148,9 @@ async def ws_endpoint(websocket: WebSocket) -> None:
                 done, _pending = await asyncio.wait(
                     {sender, receiver}, return_when=asyncio.FIRST_COMPLETED
                 )
-                # El motivo real del cierre, para la línea canónica — no
-                # cambia qué le mandamos al cliente (siempre un cierre
-                # limpio), solo lo que queda en el log.
+                # The real reason for the close, for the canonical line —
+                # doesn't change what we send the client (always a clean
+                # close), only what ends up in the log.
                 if receiver in done and isinstance(receiver.exception(), TimeoutError):
                     close_reason = "heartbeat_timeout"
             finally:

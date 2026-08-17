@@ -1,13 +1,13 @@
-"""DoD de la Fase 8: handler global que nunca filtra internals, logging
-correlacionado (`request_id`/`user_id`) con línea canónica, CORS
-restringido, rate limiting global (incluido el de `/ws`, aparte por la
-limitación real de `slowapi` con WebSockets), y límite de tamaño de body.
+"""Phase 8's DoD: a global handler that never leaks internals, correlated
+logging (`request_id`/`user_id`) with a canonical line, restricted CORS,
+global rate limiting (including `/ws`'s, kept separate because of
+`slowapi`'s real limitation with WebSockets), and a body size limit.
 
-Para capturar la línea canónica se engancha un handler propio directamente
-al logger `"canonical"` en vez de usar `caplog` — ver
-`test_alembic_logging.py` para el porqué (un bug real de `alembic/env.py`
-que salió escribiendo este archivo, y que dejaba sin efecto cualquier
-handler que pytest intentara enganchar por su cuenta).
+To capture the canonical line, a handler is attached directly to the
+`"canonical"` logger instead of using `caplog` — see
+`test_alembic_logging.py` for why (a real bug in `alembic/env.py` that
+surfaced while writing this file, which nullified any handler pytest tried
+to attach on its own).
 """
 
 import logging
@@ -38,19 +38,19 @@ class _CollectingHandler(logging.Handler):
 async def _register(client: AsyncClient) -> str:
     email = f"{uuid.uuid4()}@example.com"
     register = await client.post(
-        "/api/v1/auth/register", json={"email": email, "password": "contraseña-larga"}
+        "/api/v1/auth/register", json={"email": email, "password": "a-long-password"}
     )
     token: str = register.json()["access_token"]
     return token
 
 
-async def test_excepcion_no_mapeada_responde_500_sin_filtrar_el_mensaje_real(
+async def test_unmapped_exception_responds_500_without_leaking_the_real_message(
     integration_settings: Settings, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from app.services import wallet as wallet_service
 
     async def _boom(*args: Any, **kwargs: Any) -> Any:
-        raise RuntimeError("credenciales de la base de datos: hunter2")
+        raise RuntimeError("database credentials: hunter2")
 
     monkeypatch.setattr(wallet_service, "get_balance", _boom)
 
@@ -61,11 +61,10 @@ async def test_excepcion_no_mapeada_responde_500_sin_filtrar_el_mensaje_real(
     app = create_app(integration_settings)
     try:
         async with LifespanManager(app):
-            # `raise_app_exceptions=False`: Starlette relanza la excepción
-            # tras mandar la respuesta (para que el servidor ASGI la
-            # loggee) — sin este flag, httpx la vuelve a levantar aquí y
-            # nunca llegaríamos a ver la respuesta real que sí recibió el
-            # cliente.
+            # `raise_app_exceptions=False`: Starlette re-raises the
+            # exception after sending the response (so the ASGI server logs
+            # it) — without this flag, httpx raises it again here and we'd
+            # never get to see the real response the client did receive.
             transport = ASGITransport(app=app, raise_app_exceptions=False)
             async with AsyncClient(transport=transport, base_url="http://test") as client:
                 token = await _register(client)
@@ -80,15 +79,16 @@ async def test_excepcion_no_mapeada_responde_500_sin_filtrar_el_mensaje_real(
         canonical_logger.removeHandler(collector)
 
     assert response.status_code == 500
-    assert response.json() == {"detail": "error interno"}
+    assert response.json() == {"detail": "internal error"}
     assert "hunter2" not in response.text
-    # Regresión: Starlette manda los handlers de `Exception`/500 registrados
-    # con `add_exception_handler` a `ServerErrorMiddleware`, la capa MÁS
-    # externa — por fuera de CORS y de RequestContextMiddleware. Una
-    # respuesta generada ahí no llevaría estos headers, y la línea canónica
-    # quedaría con `status_code: null`. Por eso el catch-all es middleware
-    # (`UnhandledExceptionMiddleware`), no un exception handler — estos
-    # asserts son lo que se rompe si eso vuelve a cambiar.
+    # Regression: Starlette routes `Exception`/500 handlers registered with
+    # `add_exception_handler` to `ServerErrorMiddleware`, the layer
+    # MOST outer of all — outside CORS and RequestContextMiddleware. A
+    # response generated there wouldn't carry these headers, and the
+    # canonical line would end up with `status_code: null`. That's why the
+    # catch-all is middleware (`UnhandledExceptionMiddleware`), not an
+    # exception handler — these asserts are what breaks if that ever
+    # changes again.
     assert response.headers.get("access-control-allow-origin") == "http://localhost:3000"
     assert "x-request-id" in response.headers
 
@@ -100,7 +100,7 @@ async def test_excepcion_no_mapeada_responde_500_sin_filtrar_el_mensaje_real(
     assert balance_lines[0]["status_code"] == 500
 
 
-async def test_respuesta_http_incluye_x_request_id(integration_settings: Settings) -> None:
+async def test_http_response_includes_x_request_id(integration_settings: Settings) -> None:
     app = create_app(integration_settings)
     async with LifespanManager(app):
         transport = ASGITransport(app=app)
@@ -108,10 +108,10 @@ async def test_respuesta_http_incluye_x_request_id(integration_settings: Setting
             response = await client.get("/health")
 
     assert "x-request-id" in response.headers
-    uuid.UUID(response.headers["x-request-id"])  # no levanta si es un UUID válido
+    uuid.UUID(response.headers["x-request-id"])  # doesn't raise if it's a valid UUID
 
 
-async def test_linea_canonica_de_un_post_incluye_lo_que_bind_canonical_agrego(
+async def test_a_posts_canonical_line_includes_what_bind_canonical_added(
     integration_settings: Settings,
 ) -> None:
     collector = _CollectingHandler()
@@ -148,7 +148,7 @@ async def test_linea_canonica_de_un_post_incluye_lo_que_bind_canonical_agrego(
     assert "duration_ms" in line
 
 
-async def test_metrics_expone_formato_prometheus_y_refleja_actividad(
+async def test_metrics_exposes_prometheus_format_and_reflects_activity(
     integration_settings: Settings,
 ) -> None:
     app = create_app(integration_settings)
@@ -165,7 +165,7 @@ async def test_metrics_expone_formato_prometheus_y_refleja_actividad(
     assert 'path="/health"' in body
 
 
-async def test_body_demasiado_grande_responde_413(integration_settings: Settings) -> None:
+async def test_oversized_body_responds_413(integration_settings: Settings) -> None:
     settings = integration_settings.model_copy(update={"MAX_REQUEST_BODY_BYTES": 100})
     app = create_app(settings)
     async with LifespanManager(app):
@@ -193,7 +193,7 @@ async def test_body_demasiado_grande_responde_413(integration_settings: Settings
     assert response.status_code == 413
 
 
-async def test_ws_connect_rate_limit_cierra_tras_demasiados_intentos(
+async def test_ws_connect_rate_limit_closes_after_too_many_attempts(
     integration_settings: Settings,
 ) -> None:
     settings = integration_settings.model_copy(
@@ -203,8 +203,8 @@ async def test_ws_connect_rate_limit_cierra_tras_demasiados_intentos(
     async with LifespanManager(app):
         transport = ASGIWebSocketTransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
-            # Token inválido a propósito: lo que se limita es el *intento de
-            # conexión*, antes incluso de decodificar el token.
+            # Invalid token on purpose: what's being limited is the
+            # *connection attempt*, before the token is even decoded.
             for _ in range(2):
                 with pytest.raises(WebSocketDisconnect) as exc_info:
                     async with aconnect_ws("http://test/api/v1/ws?token=bad", client):

@@ -1,11 +1,11 @@
-"""Productor de Kafka. `acks="all"` + `enable_idempotence=True` evitan que el
-propio productor duplique un mensaje al reintentar un envío que falló a
-medio camino de red — no protegen contra que el *relay* publique la misma
-fila del outbox dos veces si el proceso muere entre "Kafka confirmó" y
-"se marcó published_at". Ese caso es el que hace que el sistema sea
-at-least-once de punta a punta, tal como ya documentaba
-`contracts/events/README.md` desde la Fase 1: `event_id` es la clave de
-deduplicación del lado del consumidor, no algo que el productor resuelva.
+"""Kafka producer. `acks="all"` + `enable_idempotence=True` stop the
+producer itself from duplicating a message when retrying a send that
+failed partway through the network — they don't protect against the
+*relay* publishing the same outbox row twice if the process dies between
+"Kafka confirmed" and "published_at got marked". That case is what makes
+the system at-least-once end to end, as `contracts/events/README.md`
+already documented since Phase 1: `event_id` is the consumer-side
+deduplication key, not something the producer resolves.
 """
 
 from aiokafka import AIOKafkaProducer
@@ -15,9 +15,9 @@ from app.events.schemas import EVENT_TOPIC_SUFFIXES
 
 
 async def check_kafka(producer: AIOKafkaProducer, settings: Settings) -> None:
-    """Check de `/ready`: pide los metadatos de un topic real. Si el broker
-    no responde, `partitions_for` lanza — eso es justo lo que `/ready`
-    necesita para reportar `fail`.
+    """`/ready` check: asks for a real topic's metadata. If the broker
+    doesn't respond, `partitions_for` raises — which is exactly what
+    `/ready` needs to report `fail`.
     """
     topic = f"{settings.KAFKA_TOPIC_PREFIX}.{EVENT_TOPIC_SUFFIXES['bet.placed']}"
     await producer.partitions_for(topic)

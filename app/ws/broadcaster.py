@@ -1,11 +1,11 @@
-"""Pub/sub en memoria para notificaciones WebSocket, por usuario.
+"""In-memory pub/sub for per-user WebSocket notifications.
 
-`Broadcaster` separa "quién dispara un evento" (las rutas HTTP, después de
-comprometer una transacción) de "quién lo entrega" (el endpoint `/ws`).
-`InMemoryBroadcaster` es la única implementación hoy — vive en el proceso,
-así que solo entrega a clientes conectados a *esta* instancia. El día que
-haga falta correr varias instancias, una `RedisBroadcaster` (PUBLISH/
-SUBSCRIBE) implementa el mismo `Protocol` y ningún endpoint cambia.
+`Broadcaster` separates "who triggers an event" (the HTTP routes, after
+committing a transaction) from "who delivers it" (the `/ws` endpoint).
+`InMemoryBroadcaster` is the only implementation today — it lives in the
+process, so it only delivers to clients connected to *this* instance. The
+day running several instances becomes necessary, a `RedisBroadcaster`
+(PUBLISH/SUBSCRIBE) implements the same `Protocol` and no endpoint changes.
 """
 
 import asyncio
@@ -15,9 +15,9 @@ from collections.abc import AsyncIterator
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from typing import Any, Protocol
 
-#: Cuántos mensajes sin entregar se guardan por conexión antes de descartar
-#: el más viejo. Un cliente con la pestaña en segundo plano no debe frenar a
-#: los demás ni acumular memoria sin límite mientras siga conectado.
+#: How many undelivered messages are kept per connection before the oldest
+#: gets dropped. A client with the tab in the background shouldn't slow
+#: down anyone else, nor accumulate unbounded memory while it stays connected.
 QUEUE_MAXSIZE = 32
 
 Message = dict[str, Any]
@@ -38,8 +38,8 @@ class InMemoryBroadcaster:
     async def publish(self, user_id: uuid.UUID, message: Message) -> None:
         for queue in self._subscribers.get(user_id, ()):
             if queue.full():
-                # Cliente lento: se descarta el mensaje más viejo en vez de
-                # bloquear a quien publica (que es una petición HTTP en curso).
+                # Slow client: drop the oldest message instead of blocking
+                # the publisher (which is an HTTP request in progress).
                 with contextlib.suppress(asyncio.QueueEmpty):
                     queue.get_nowait()
             queue.put_nowait(message)

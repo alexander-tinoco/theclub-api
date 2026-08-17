@@ -1,7 +1,8 @@
-"""Los invariantes "todo usuario tiene wallet / seed pair activo" se sostienen
-por construcción (register_user crea ambos), pero si alguna vez no fuera así
-—un bug en otra parte, datos corruptos— esto debe fallar con una excepción
-clara, no un AttributeError críptico ni (peor) un `assert` que `-O` descarta.
+"""The invariants "every user has a wallet / an active seed pair" hold by
+construction (register_user creates both), but if that were ever not the
+case — a bug elsewhere, corrupted data — this must fail with a clear
+exception, not a cryptic AttributeError nor (worse) an `assert` that `-O`
+strips out.
 """
 
 import uuid
@@ -25,19 +26,19 @@ from app.services.exceptions import DataIntegrityError
 pytestmark = pytest.mark.integration
 
 
-async def test_get_balance_de_un_usuario_sin_wallet(db_session: AsyncSession) -> None:
+async def test_get_balance_for_a_user_with_no_wallet(db_session: AsyncSession) -> None:
     with pytest.raises(DataIntegrityError):
         await wallet_service.get_balance(db_session, user_id=uuid.uuid4())
 
 
-async def test_list_transactions_de_un_usuario_sin_wallet(db_session: AsyncSession) -> None:
+async def test_list_transactions_for_a_user_with_no_wallet(db_session: AsyncSession) -> None:
     with pytest.raises(DataIntegrityError):
         await wallet_service.list_transactions(
             db_session, user_id=uuid.uuid4(), cursor=None, limit=20
         )
 
 
-async def test_deposit_de_un_usuario_sin_wallet(db_session: AsyncSession) -> None:
+async def test_deposit_for_a_user_with_no_wallet(db_session: AsyncSession) -> None:
     with pytest.raises(DataIntegrityError):
         await wallet_service.deposit(
             db_session,
@@ -48,17 +49,17 @@ async def test_deposit_de_un_usuario_sin_wallet(db_session: AsyncSession) -> Non
         )
 
 
-async def test_get_current_seed_de_un_usuario_sin_seed_pair(db_session: AsyncSession) -> None:
+async def test_get_current_seed_for_a_user_with_no_seed_pair(db_session: AsyncSession) -> None:
     with pytest.raises(DataIntegrityError):
         await fairness_service.get_current_seed(db_session, user_id=uuid.uuid4())
 
 
-async def test_rotate_seed_de_un_usuario_sin_seed_pair(db_session: AsyncSession) -> None:
+async def test_rotate_seed_for_a_user_with_no_seed_pair(db_session: AsyncSession) -> None:
     with pytest.raises(DataIntegrityError):
         await fairness_service.rotate_seed(db_session, user_id=uuid.uuid4())
 
 
-async def test_place_bet_de_un_usuario_sin_wallet(db_session: AsyncSession) -> None:
+async def test_place_bet_for_a_user_with_no_wallet(db_session: AsyncSession) -> None:
     with pytest.raises(DataIntegrityError):
         await roulette_service.place_bet(
             db_session,
@@ -71,12 +72,12 @@ async def test_place_bet_de_un_usuario_sin_wallet(db_session: AsyncSession) -> N
         )
 
 
-async def test_place_bet_de_un_usuario_con_wallet_pero_sin_seed_pair(
+async def test_place_bet_for_a_user_with_a_wallet_but_no_seed_pair(
     db_session: AsyncSession,
 ) -> None:
-    # Un usuario "corrupto": tiene wallet, pero nunca se le creó un seed pair
-    # -- no debería poder pasar por register_user, pero si pasa por otra vía
-    # (un bug, una migración de datos), esto no debe explotar en silencio.
+    # A "corrupted" user: has a wallet, but was never given a seed pair --
+    # shouldn't be possible via register_user, but if it happens through
+    # another path (a bug, a data migration), this must not blow up silently.
     user = await UserRepository(db_session).create(
         email=f"{uuid.uuid4()}@example.com", password_hash="x"
     )
@@ -95,12 +96,12 @@ async def test_place_bet_de_un_usuario_con_wallet_pero_sin_seed_pair(
         )
 
 
-async def test_el_handler_http_de_data_integrity_error_responde_500(
+async def test_the_data_integrity_error_http_handler_responds_500(
     integration_settings: Settings, db_session: AsyncSession
 ) -> None:
-    """Los tests de arriba prueban que el servicio levanta la excepción; este
-    prueba que el endpoint HTTP de verdad la traduce a 500 -- el handler
-    registrado en app/api/errors.py nunca se había ejercitado hasta ahora."""
+    """The tests above prove the service raises the exception; this one
+    proves the real HTTP endpoint translates it into a 500 -- the handler
+    registered in app/api/errors.py had never been exercised until now."""
     app = create_app(integration_settings)
     async with LifespanManager(app):
         transport = ASGITransport(app=app)
@@ -108,7 +109,7 @@ async def test_el_handler_http_de_data_integrity_error_responde_500(
             email = f"{uuid.uuid4()}@example.com"
             register = await client.post(
                 "/api/v1/auth/register",
-                json={"email": email, "password": "contraseña-larga"},
+                json={"email": email, "password": "a-long-password"},
             )
             headers = {"Authorization": f"Bearer {register.json()['access_token']}"}
 

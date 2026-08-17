@@ -1,15 +1,16 @@
-"""Contraparte Pydantic de los JSON Schema en `contracts/events/`.
+"""Pydantic counterpart of the JSON Schemas in `contracts/events/`.
 
-Dos artefactos describen la misma forma de dato desde ángulos distintos: los JSON
-Schema son el contrato público hacia `theclub-web` y `theclub-data`, estos modelos son
-lo que usa `app` internamente al escribir el outbox (Fase 6). `tests/unit/test_event_contracts.py`
-valida los mismos ejemplos contra ambos para que no se desincronicen.
+Two artifacts describe the same data shape from different angles: the JSON
+Schemas are the public contract towards `theclub-web` and `theclub-data`,
+these models are what `app` uses internally when writing to the outbox
+(Phase 6). `tests/unit/test_event_contracts.py` validates the same examples
+against both so they never drift apart.
 
-`BetType` y `Selection` se importan de `app.domain.roulette` en vez de redeclararse
-aquí: el dominio (Fase 2) es quien posee el vocabulario de la ruleta, y esta capa de
-eventos lo reutiliza para que los 13 tipos de apuesta no vivan duplicados en dos
-sitios que podrían divergir. `app/domain/` sigue sin saber que `app/events/` existe —
-la dependencia va en un solo sentido.
+`BetType` and `Selection` are imported from `app.domain.roulette` instead
+of being redeclared here: the domain (Phase 2) owns roulette's vocabulary,
+and this events layer reuses it so the 13 bet types don't live duplicated
+in two places that could diverge. `app/domain/` still doesn't know
+`app/events/` exists — the dependency only goes one way.
 """
 
 from datetime import datetime
@@ -25,7 +26,7 @@ Currency = Literal["EUR"]
 
 
 class EventEnvelope[TData: BaseModel](BaseModel):
-    """El sobre común a los tres eventos. Ver `contracts/events/envelope.v1.schema.json`."""
+    """The envelope shared by all three events. See `contracts/events/envelope.v1.schema.json`."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -39,7 +40,7 @@ class EventEnvelope[TData: BaseModel](BaseModel):
 
 
 class BetPlacedData(BaseModel):
-    """theclub.bets.placed.v1 — qué apostó el usuario, antes de resolver la ronda."""
+    """theclub.bets.placed.v1 — what the user bet, before the round is resolved."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -64,7 +65,7 @@ class SettledBet(BaseModel):
 
 
 class RoundSettledData(BaseModel):
-    """theclub.rounds.settled.v1 — el resultado y cómo pagó cada apuesta de la ronda."""
+    """theclub.rounds.settled.v1 — the outcome and how each bet in the round paid out."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -85,7 +86,7 @@ WalletTransactionRefType = Literal["round", "bet", "manual"]
 
 
 class WalletTransactionData(BaseModel):
-    """theclub.wallet.transactions.v1 — un evento por cada fila del ledger."""
+    """theclub.wallet.transactions.v1 — one event per ledger row."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -104,9 +105,9 @@ BetPlacedEvent = EventEnvelope[BetPlacedData]
 RoundSettledEvent = EventEnvelope[RoundSettledData]
 WalletTransactionEvent = EventEnvelope[WalletTransactionData]
 
-#: Sufijo de topic por tipo de evento. La Fase 6 antepone `settings.KAFKA_TOPIC_PREFIX`
-#: (p. ej. "theclub" + "." + "bets.placed.v1" = "theclub.bets.placed.v1") en vez de
-#: hardcodear el prefijo aquí, para que cambiarlo sea una variable de entorno.
+#: Topic suffix per event type. Phase 6 prepends `settings.KAFKA_TOPIC_PREFIX`
+#: (e.g. "theclub" + "." + "bets.placed.v1" = "theclub.bets.placed.v1") instead
+#: of hardcoding the prefix here, so changing it is just an environment variable.
 EVENT_TOPIC_SUFFIXES: dict[str, str] = {
     "bet.placed": "bets.placed.v1",
     "round.settled": "rounds.settled.v1",

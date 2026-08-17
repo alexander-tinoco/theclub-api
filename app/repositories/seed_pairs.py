@@ -1,5 +1,5 @@
-"""Acceso a datos de seed pairs (provably fair). Sin criptografía aquí —
-`app/domain/fairness.py` genera server_seed/hash; este módulo solo persiste."""
+"""Data access for seed pairs (provably fair). No cryptography here —
+`app/domain/fairness.py` generates server_seed/hash; this module only persists."""
 
 import uuid
 from datetime import UTC, datetime
@@ -36,11 +36,11 @@ class SeedPairRepository:
         return seed_pair
 
     async def consume_nonce(self, seed_pair_id: uuid.UUID) -> int:
-        """Incrementa el nonce de forma atómica y devuelve el nuevo valor —
-        mismo patrón que `WalletRepository.debit`: una sola sentencia UPDATE,
-        sin lectura previa, así dos apuestas concurrentes del mismo usuario
-        nunca reciben el mismo nonce. El primer giro usable es el 1, no el 0
-        (el 0 es "cero giros consumidos todavía").
+        """Increments the nonce atomically and returns the new value — same
+        pattern as `WalletRepository.debit`: a single UPDATE statement,
+        with no prior read, so two concurrent bets from the same user never
+        get the same nonce. The first usable spin is 1, not 0 (0 means
+        "zero spins consumed so far").
         """
         stmt = (
             update(SeedPair)

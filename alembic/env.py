@@ -16,19 +16,19 @@ config = context.config
 # Interpret the config file for Python logging.
 # This line sets up loggers basically.
 #
-# `disable_existing_loggers=False`: el default de `fileConfig` (`True`)
-# desactiva cualquier logger ya creado que no esté listado en `alembic.ini`
-# — inofensivo cuando Alembic corre como proceso CLI aparte (como en
-# producción, vía `make`), pero los tests de integración migran la base
-# *en el mismo proceso* (`command.upgrade()` en `conftest.py`), después de
-# que pytest ya importó `app/` y creó todos sus loggers de módulo. Sin este
-# flag, esos loggers quedaban silenciosamente desactivados durante toda la
-# suite — se descubrió escribiendo el test de la línea canónica (Fase 8).
+# `disable_existing_loggers=False`: `fileConfig`'s default (`True`)
+# disables any logger already created that isn't listed in `alembic.ini`
+# — harmless when Alembic runs as a separate CLI process (like in
+# production, via `make`), but the integration tests migrate the database
+# *in the same process* (`command.upgrade()` in `conftest.py`), after
+# pytest has already imported `app/` and created all its module loggers.
+# Without this flag, those loggers stayed silently disabled for the entire
+# suite — discovered while writing the canonical-line test (Phase 8).
 if config.config_file_name is not None:
     fileConfig(config.config_file_name, disable_existing_loggers=False)
 
-# La URL real viene de Settings (.env), no de alembic.ini — así no hay dos
-# sitios donde configurar la conexión a la base de datos.
+# The real URL comes from Settings (.env), not from alembic.ini — so
+# there's only one place to configure the database connection.
 config.set_main_option("sqlalchemy.url", get_settings().DATABASE_URL)
 
 target_metadata = Base.metadata

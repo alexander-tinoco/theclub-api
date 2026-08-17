@@ -1,7 +1,7 @@
-"""Cursor de paginación por keyset (`created_at`, `id`) — opaco para el
-cliente, nunca offset: un offset sufre "page drift" si algo se inserta entre
-dos páginas leídas; un keyset no, porque cada página parte del último
-elemento visto, no de una posición numérica.
+"""Keyset pagination cursor (`created_at`, `id`) — opaque to the client,
+never an offset: an offset suffers "page drift" if something gets inserted
+between two pages read; a keyset doesn't, because each page starts from the
+last item seen, not from a numeric position.
 """
 
 import base64
@@ -10,7 +10,7 @@ from datetime import datetime
 
 
 class InvalidCursorError(Exception):
-    """El cursor no tiene la forma que `encode_cursor` produce."""
+    """The cursor doesn't have the shape `encode_cursor` produces."""
 
 
 def encode_cursor(created_at: datetime, item_id: uuid.UUID) -> str:

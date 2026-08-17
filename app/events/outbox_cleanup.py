@@ -1,8 +1,8 @@
-"""Limpieza periódica del outbox. El relay (`relay.py`) publica y marca cada
-fila, pero nunca las borra — sin este proceso aparte la tabla crecería para
-siempre aunque Kafka nunca falle. Corre en su propio intervalo, mucho más
-largo que el de sondeo del relay, porque no hay urgencia: una fila publicada
-hace una hora no le hace daño a nadie por quedarse un rato más.
+"""Periodic outbox cleanup. The relay (`relay.py`) publishes and marks every
+row, but never deletes them — without this separate process the table would
+grow forever even if Kafka never fails. Runs on its own interval, much
+longer than the relay's polling interval, because there's no urgency: a row
+published an hour ago doesn't hurt anyone by sticking around a bit longer.
 """
 
 import asyncio
@@ -20,23 +20,20 @@ logger = logging.getLogger(__name__)
 async def purge_once(
     session_factory: async_sessionmaker[AsyncSession], *, retention_hours: int
 ) -> int:
-    """Borra un lote de filas publicadas más viejas que `retention_hours`.
-    Devuelve cuántas borró (0 = nada que limpiar todavía).
+    """Deletes a batch of published rows older than `retention_hours`.
+    Returns how many it deleted (0 = nothing to clean up yet).
     """
     cutoff = datetime.now(UTC) - timedelta(hours=retention_hours)
     async with session_factory() as session, session.begin():
         deleted = await OutboxRepository(session).purge_published(older_than=cutoff)
     if deleted:
-        logger.info(
-            "Outbox: %d filas publicadas purgadas (retención %dh)", deleted, retention_hours
-        )
+        logger.info("Outbox: purged %d published rows (retention %dh)", deleted, retention_hours)
     return deleted
 
 
 async def purge_loop(session_factory: async_sessionmaker[AsyncSession], settings: Settings) -> None:
-    """Corre para siempre hasta que se cancele la tarea, en el shutdown del
-    lifespan — igual que `relay_loop`, un ciclo que falla no debe matar la
-    tarea de fondo.
+    """Runs forever until the task is cancelled, at lifespan shutdown — same
+    as `relay_loop`, a cycle that fails must not kill the background task.
     """
     interval_seconds = settings.OUTBOX_CLEANUP_INTERVAL_S
     while True:
@@ -45,5 +42,5 @@ async def purge_loop(session_factory: async_sessionmaker[AsyncSession], settings
         except asyncio.CancelledError:
             raise
         except Exception:
-            logger.exception("La limpieza del outbox falló en un ciclo completo")
+            logger.exception("Outbox cleanup failed on a full cycle")
         await asyncio.sleep(interval_seconds)

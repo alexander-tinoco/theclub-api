@@ -1,7 +1,7 @@
-"""Acceso a datos de wallets. Sin lógica de negocio — eso vive en app/services/
-(Fase 5). El único mecanismo de escritura son `debit`/`credit`, atómicos; no
-hay ni habrá un `set_balance`, para que nunca exista un read-modify-write que
-necesite bloqueo optimista.
+"""Data access for wallets. No business logic — that lives in app/services/
+(Phase 5). The only write mechanisms are `debit`/`credit`, both atomic; there
+is not, and will never be, a `set_balance`, so a read-modify-write that needs
+optimistic locking can never exist.
 """
 
 import uuid
@@ -14,7 +14,7 @@ from app.models.wallet import Wallet
 
 
 class InsufficientFundsError(Exception):
-    """El wallet no tiene saldo suficiente para el débito solicitado."""
+    """The wallet doesn't have enough balance for the requested debit."""
 
 
 class WalletRepository:
@@ -26,13 +26,13 @@ class WalletRepository:
         return result.scalar_one_or_none()
 
     async def debit(self, wallet_id: uuid.UUID, amount: Money) -> int:
-        """Descuenta `amount` de forma atómica. Devuelve el balance resultante.
+        """Deducts `amount` atomically. Returns the resulting balance.
 
-        Una sola sentencia `UPDATE ... WHERE ... RETURNING`, sin lectura previa:
-        dos débitos concurrentes sobre el mismo wallet nunca pueden dejarlo en
-        negativo, porque es la base de datos —no una carrera de lecturas en
-        Python— quien decide si la condición `balance_minor >= amount` se
-        cumple en el momento exacto de la escritura.
+        A single `UPDATE ... WHERE ... RETURNING` statement, with no prior
+        read: two concurrent debits against the same wallet can never leave
+        it negative, because it's the database — not a read race in
+        Python — that decides whether the `balance_minor >= amount`
+        condition holds at the exact moment of the write.
         """
         stmt = (
             update(Wallet)
@@ -44,12 +44,12 @@ class WalletRepository:
         new_balance = result.scalar_one_or_none()
         if new_balance is None:
             raise InsufficientFundsError(
-                f"wallet {wallet_id} no cubre un débito de {amount.minor} {amount.currency}"
+                f"wallet {wallet_id} can't cover a debit of {amount.minor} {amount.currency}"
             )
         return new_balance
 
     async def credit(self, wallet_id: uuid.UUID, amount: Money) -> int:
-        """Acredita `amount`. Igual de atómica que `debit`, sin condición de saldo."""
+        """Credits `amount`. Just as atomic as `debit`, with no balance condition."""
         stmt = (
             update(Wallet)
             .where(Wallet.id == wallet_id)

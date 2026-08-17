@@ -1,4 +1,4 @@
-"""Casos de uso de wallet: balance, historial, depósito simulado."""
+"""Wallet use cases: balance, history, simulated deposit."""
 
 import uuid
 from dataclasses import dataclass
@@ -16,10 +16,10 @@ from app.repositories.ledger import LedgerRepository
 from app.repositories.wallets import WalletRepository
 from app.services.exceptions import DataIntegrityError
 
-#: Tope de sanidad para el depósito simulado — no hay pasarela de pago real
-#: detrás, así que no hay un límite de negocio "de verdad"; esto solo evita
-#: que un número desorbitado se cuele sin querer.
-MAX_DEPOSIT_MINOR = 10_000_000  # 100,000.00 en la divisa de la mesa
+#: Sanity cap for the simulated deposit — there's no real payment gateway
+#: behind it, so there's no "real" business limit; this only stops an
+#: outlandish number from slipping through by accident.
+MAX_DEPOSIT_MINOR = 10_000_000  # 100,000.00 in the table's currency
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,7 +34,7 @@ class BalanceView:
 async def get_balance(session: AsyncSession, *, user_id: uuid.UUID) -> BalanceView:
     wallet = await WalletRepository(session).get_by_user_id(user_id)
     if wallet is None:
-        raise DataIntegrityError(f"user {user_id} sin wallet")
+        raise DataIntegrityError(f"user {user_id} has no wallet")
     return BalanceView(balance_minor=wallet.balance_minor, currency=wallet.currency)
 
 
@@ -47,7 +47,7 @@ async def list_transactions(
 ) -> list[LedgerEntry]:
     wallet = await WalletRepository(session).get_by_user_id(user_id)
     if wallet is None:
-        raise DataIntegrityError(f"user {user_id} sin wallet")
+        raise DataIntegrityError(f"user {user_id} has no wallet")
     return await LedgerRepository(session).list_by_wallet(wallet.id, cursor=cursor, limit=limit)
 
 
@@ -62,7 +62,7 @@ async def deposit(
     wallets = WalletRepository(session)
     wallet = await wallets.get_by_user_id(user_id)
     if wallet is None:
-        raise DataIntegrityError(f"user {user_id} sin wallet")
+        raise DataIntegrityError(f"user {user_id} has no wallet")
 
     balance_after = await wallets.credit(wallet.id, Money(amount_minor))
 

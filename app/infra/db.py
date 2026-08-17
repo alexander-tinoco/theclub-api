@@ -1,9 +1,9 @@
-"""Motor async de SQLAlchemy y unit of work.
+"""SQLAlchemy async engine and unit of work.
 
-Un único `AsyncEngine` por proceso, creado en `create_app()` (no en el
-lifespan: así los tests que no lo arrancan siguen teniendo un
-`db_session_factory` funcional); aquí solo se define cómo se construye y cómo
-se abre una transacción.
+A single `AsyncEngine` per process, created in `create_app()` (not in the
+lifespan: that way tests that don't start it still get a working
+`db_session_factory`); this only defines how it's built and how a
+transaction is opened.
 """
 
 from collections.abc import AsyncIterator
@@ -16,9 +16,9 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
-#: Si una sola sentencia tarda más de esto, Postgres la cancela sola. Sin
-#: esto, una consulta colgada (deadlock, IO lento) deja el request esperando
-#: para siempre en vez de fallar con un error que se pueda manejar.
+#: If a single statement takes longer than this, Postgres cancels it on its
+#: own. Without this, a hung query (deadlock, slow IO) leaves the request
+#: waiting forever instead of failing with an error that can be handled.
 STATEMENT_TIMEOUT_MS = 30_000
 
 
@@ -33,9 +33,10 @@ def create_engine(database_url: str, *, pool_size: int) -> AsyncEngine:
 
 
 def create_session_factory(engine: AsyncEngine) -> async_sessionmaker[AsyncSession]:
-    # expire_on_commit=False: sin esto, tras el commit SQLAlchemy invalida los
-    # objetos ORM y el siguiente acceso a un atributo dispara una consulta
-    # nueva implícita — rompe cuando el objeto ya se devolvió fuera de la sesión.
+    # expire_on_commit=False: without this, after a commit SQLAlchemy
+    # invalidates the ORM objects and the next attribute access triggers an
+    # implicit new query — breaks once the object has already been returned
+    # outside the session.
     return async_sessionmaker(engine, expire_on_commit=False)
 
 
@@ -43,6 +44,6 @@ def create_session_factory(engine: AsyncEngine) -> async_sessionmaker[AsyncSessi
 async def unit_of_work(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> AsyncIterator[AsyncSession]:
-    """Una transacción: commit si todo va bien, rollback si algo levanta."""
+    """One transaction: commit if everything goes well, rollback if anything raises."""
     async with session_factory() as session, session.begin():
         yield session

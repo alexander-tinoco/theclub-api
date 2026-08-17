@@ -1,6 +1,7 @@
-"""Recuperación tras un proceso que murió a medio camino: una fila 'pending'
-abandonada (más vieja que PENDING_RECLAIM_SECONDS) no bloquea reintentos para
-siempre con un 409 perpetuo -- se reclama y el negocio se ejecuta de verdad.
+"""Recovery after a process that died halfway through: an abandoned
+'pending' row (older than PENDING_RECLAIM_SECONDS) doesn't block retries
+forever with a perpetual 409 -- it gets reclaimed and the business logic
+actually runs.
 """
 
 import uuid
@@ -20,7 +21,7 @@ from app.services.idempotency import hash_request_body, run_idempotent
 pytestmark = pytest.mark.integration
 
 
-async def test_una_fila_pending_abandonada_se_reclama(
+async def test_an_abandoned_pending_row_gets_reclaimed(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
     integration_settings: Settings,
@@ -30,11 +31,12 @@ async def test_una_fila_pending_abandonada_se_reclama(
     )
     await db_session.commit()
 
-    key = "clave-abandonada"
+    key = "abandoned-key"
     request_hash = hash_request_body(b'{"x": 1}')
 
-    # Simula un proceso que reservó la clave y murió antes de terminar: una
-    # fila 'pending' con created_at ya viejo, sin pasar por run_idempotent.
+    # Simulates a process that reserved the key and died before finishing:
+    # a 'pending' row with an already-old created_at, never going through
+    # run_idempotent.
     stale_row = await IdempotencyKeyRepository(db_session).create_pending(
         user_id=user.id,
         key=key,

@@ -6,7 +6,7 @@ from app.api.health import ReadinessRegistry
 pytestmark = pytest.mark.unit
 
 
-async def test_health_no_toca_dependencias(client: AsyncClient) -> None:
+async def test_health_touches_no_dependencies(client: AsyncClient) -> None:
     response = await client.get("/health")
 
     assert response.status_code == 200
@@ -16,19 +16,19 @@ async def test_health_no_toca_dependencias(client: AsyncClient) -> None:
     assert body["name"] == "theclub-api"
 
 
-# El comportamiento real de /ready (con el check de Postgres que create_app()
-# registra siempre) depende de infraestructura real y se prueba en
-# tests/integration/test_health_ready.py. Aquí se prueba el mecanismo de
-# ReadinessRegistry en aislamiento, con un registro propio, no el de la app.
+# /ready's real behavior (with the Postgres check that create_app() always
+# registers) depends on real infrastructure and is tested in
+# tests/integration/test_health_ready.py. Here the ReadinessRegistry
+# mechanism is tested in isolation, with its own registry, not the app's.
 
 
-async def test_registry_sin_checks_registrados() -> None:
+async def test_registry_with_no_checks_registered() -> None:
     registry = ReadinessRegistry()
 
     assert await registry.run() == {}
 
 
-async def test_registry_con_check_que_pasa() -> None:
+async def test_registry_with_a_passing_check() -> None:
     async def ok() -> None:
         return None
 
@@ -38,12 +38,12 @@ async def test_registry_con_check_que_pasa() -> None:
     assert await registry.run() == {"database": "ok"}
 
 
-async def test_registry_reporta_fail_sin_tumbar_los_demas() -> None:
+async def test_registry_reports_fail_without_bringing_down_the_rest() -> None:
     async def ok() -> None:
         return None
 
     async def boom() -> None:
-        raise ConnectionError("sin ruta al broker")
+        raise ConnectionError("no route to broker")
 
     registry = ReadinessRegistry()
     registry.register("database", ok)
@@ -52,7 +52,7 @@ async def test_registry_reporta_fail_sin_tumbar_los_demas() -> None:
     assert await registry.run() == {"database": "ok", "kafka": "fail"}
 
 
-async def test_registrar_dos_veces_el_mismo_check_es_error() -> None:
+async def test_registering_the_same_check_twice_is_an_error() -> None:
     async def ok() -> None:
         return None
 

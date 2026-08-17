@@ -1,20 +1,20 @@
-"""Middlewares ASGI que no encajan en `request_context.py` (esa es sobre
-correlación/observabilidad; esto es endurecimiento de verdad).
+"""ASGI middlewares that don't fit in `request_context.py` (that one is
+about correlation/observability; this is actual hardening).
 """
 
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 
 class MaxBodySizeMiddleware:
-    """Rechaza con 413 antes de que el body llegue a Pydantic si
-    `Content-Length` supera el límite. Gatea solo `scope["type"] == "http"`
-    a propósito: el handshake de WebSocket no tiene body que limitar aquí.
+    """Rejects with 413 before the body reaches Pydantic if `Content-Length`
+    exceeds the limit. Only gates `scope["type"] == "http"` on purpose: a
+    WebSocket handshake has no body to limit here.
 
-    Límite conocido: un cliente que mienta el `Content-Length`, o que mande
-    el body con *chunked transfer encoding* sin ese header, lo esquiva. En
-    un despliegue real esto se refuerza en el proxy/load balancer
-    (`client_max_body_size` de nginx, por ejemplo) — este middleware es la
-    defensa de la app misma, no la única línea de defensa.
+    Known limitation: a client that lies about `Content-Length`, or sends
+    the body with *chunked transfer encoding* without that header, slips
+    past it. In a real deployment this is reinforced at the proxy/load
+    balancer (nginx's `client_max_body_size`, for example) — this
+    middleware is the app's own defense, not the only line of defense.
     """
 
     def __init__(self, app: ASGIApp, *, max_body_bytes: int) -> None:
@@ -39,7 +39,7 @@ class MaxBodySizeMiddleware:
             await send(
                 {
                     "type": "http.response.body",
-                    "body": b'{"detail":"cuerpo de la petici\\u00f3n demasiado grande"}',
+                    "body": b'{"detail":"request body too large"}',
                 }
             )
             return

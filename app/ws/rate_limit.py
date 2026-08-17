@@ -1,17 +1,17 @@
-"""Límite de intentos de conexión a `/ws`, por IP, respaldado en Redis.
+"""Redis-backed limit on `/ws` connection attempts, per IP.
 
-`slowapi`/`SlowAPIMiddleware` no sirve aquí: hereda de `BaseHTTPMiddleware`,
-que Starlette salta por completo para conexiones WebSocket — así que el
-rate limiting "global" de la Fase 8 no llega a `/ws` sin este mecanismo
-aparte. Redis (no un dict en memoria) para que el conteo sobreviva a un
-redeploy del proceso — igual que el resto del rate limiting desde que se
-movió a Redis.
+`slowapi`/`SlowAPIMiddleware` doesn't work here: it inherits from
+`BaseHTTPMiddleware`, which Starlette skips entirely for WebSocket
+connections — so Phase 8's "global" rate limiting never reaches `/ws`
+without this separate mechanism. Redis (not an in-memory dict) so the
+count survives a process redeploy — same as the rest of the rate limiting
+since it moved to Redis.
 
-Ventana fija, no deslizante, a propósito: el objetivo es frenar un bucle de
-reconexión, no ofrecer precisión de ventana — para eso ya está `slowapi`
-(también sobre Redis) en el resto de la API. Una ventana fija es una sola
-operación atómica en Redis (`INCR` + `EXPIRE` la primera vez), sin
-necesidad de un sorted set ni de podar entradas viejas a mano.
+Fixed window, not sliding, on purpose: the goal is to slow down a
+reconnect loop, not offer window precision — `slowapi` (also on Redis)
+already handles that for the rest of the API. A fixed window is a single
+atomic Redis operation (`INCR` + `EXPIRE` the first time), with no need for
+a sorted set or manually pruning old entries.
 """
 
 import math
@@ -32,9 +32,9 @@ class WsConnectRateLimiter:
 
         attempts = await self._redis.incr(redis_key)
         if attempts == 1:
-            # Solo la primera petición de la ventana pone el TTL — las
-            # siguientes reutilizan el mismo `EXPIRE` ya puesto, así la
-            # clave desaparece sola sin que nada tenga que limpiarla.
+            # Only the window's first request sets the TTL — subsequent
+            # ones reuse the `EXPIRE` already set, so the key disappears on
+            # its own with nothing having to clean it up.
             await self._redis.expire(redis_key, math.ceil(self._window_seconds))
 
         return attempts <= self._max_attempts

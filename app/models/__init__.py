@@ -1,6 +1,6 @@
-"""Importar aquí cada modelo es lo que los registra en `Base.metadata` —
-Alembic (`env.py`) importa este paquete para poder autogenerar migraciones
-comparando el estado real de la base contra estas clases.
+"""Importing every model here is what registers them on `Base.metadata` —
+Alembic (`env.py`) imports this package so it can autogenerate migrations
+by comparing the database's real state against these classes.
 """
 
 from app.models.base import Base

@@ -45,7 +45,7 @@
             }
           },
           "503": {
-            "description": "Alguna dependencia no responde",
+            "description": "Some dependency isn't responding",
             "content": {
               "application/json": {
                 "schema": {
@@ -62,8 +62,8 @@
         "tags": [
           "health"
         ],
-        "summary": "Métricas Prometheus",
-        "description": "Sin autenticación: en un despliegue real esto se restringe a nivel de\nred (no expuesto a internet, solo al scraper de Prometheus), no con un\ntoken de aplicación — es la convención estándar para este endpoint.",
+        "summary": "Prometheus metrics",
+        "description": "No authentication: in a real deployment this is restricted at the\nnetwork level (not exposed to the internet, only to Prometheus's\nscraper), not with an application token — that's the standard\nconvention for this endpoint.",
         "operationId": "metrics_metrics_get",
         "responses": {
           "200": {
@@ -1146,7 +1146,7 @@
           "created_at"
         ],
         "title": "UserResponse",
-        "description": "Nunca lleva `password_hash`: el campo ni siquiera existe en este modelo,\nasí que no hay forma de que se filtre por descuido al serializar."
+        "description": "Never carries `password_hash`: the field doesn't even exist on this\nmodel, so there's no way it leaks by accident when serializing."
       },
       "ValidationError": {
         "properties": {

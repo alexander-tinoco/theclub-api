@@ -1,7 +1,7 @@
-"""DoD de la Fase 7: cliente WS conectado recibe el resultado tras el POST;
-token inválido cierra 4401. Se usa `httpx_ws` (no `httpx.ASGITransport` a
-secas, que no habla el protocolo de upgrade de WebSocket) para poder probar
-esto igual de async que el resto de la suite de integración.
+"""Phase 7's DoD: a connected WS client receives the result after the POST;
+an invalid token closes with 4401. Uses `httpx_ws` (not plain
+`httpx.ASGITransport`, which doesn't speak the WebSocket upgrade protocol)
+to test this just as async as the rest of the integration suite.
 """
 
 import asyncio
@@ -27,10 +27,10 @@ pytestmark = pytest.mark.integration
 
 
 async def _register(client: AsyncClient) -> tuple[str, str]:
-    """Devuelve (access_token, user_id)."""
+    """Returns (access_token, user_id)."""
     email = f"{uuid.uuid4()}@example.com"
     register = await client.post(
-        "/api/v1/auth/register", json={"email": email, "password": "contraseña-larga"}
+        "/api/v1/auth/register", json={"email": email, "password": "a-long-password"}
     )
     token: str = register.json()["access_token"]
     me = await client.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {token}"})
@@ -38,10 +38,10 @@ async def _register(client: AsyncClient) -> tuple[str, str]:
 
 
 class _FailingAcceptWebSocket:
-    """Doble mínimo de `WebSocket` cuyo `accept()` falla a medio handshake
-    — simula un cliente que cierra la pestaña o un proxy que corta la
-    conexión justo en ese momento, sin necesitar un cliente real que se
-    desconecte con ese timing exacto.
+    """Minimal `WebSocket` double whose `accept()` fails mid-handshake —
+    simulates a client that closes the tab or a proxy that cuts the
+    connection at that exact moment, without needing a real client that
+    disconnects with that exact timing.
     """
 
     def __init__(self, app: object, token: str) -> None:
@@ -50,18 +50,18 @@ class _FailingAcceptWebSocket:
         self.client = Address(host="127.0.0.1", port=12345)
 
     async def accept(self) -> None:
-        raise RuntimeError("handshake abortado a mitad de camino")
+        raise RuntimeError("handshake aborted midway")
 
     async def close(self, code: int = 1000) -> None:
         pass
 
 
-async def test_si_falla_el_accept_no_deja_el_cupo_de_conexion_ocupado(
+async def test_a_failed_accept_does_not_leave_the_connection_slot_occupied(
     integration_settings: Settings,
 ) -> None:
-    """Regresión: `accept()` tiene que estar dentro del try/finally que
-    desregistra la conexión — si no, un handshake que falla a medio camino
-    deja el cupo de `WS_MAX_CONNECTIONS` ocupado para siempre.
+    """Regression: `accept()` has to be inside the try/finally that
+    unregisters the connection — otherwise, a handshake that fails midway
+    leaves a `WS_MAX_CONNECTIONS` slot occupied forever.
     """
     app = create_app(integration_settings)
     async with LifespanManager(app):
@@ -76,7 +76,7 @@ async def test_si_falla_el_accept_no_deja_el_cupo_de_conexion_ocupado(
         assert len(app.state.ws_connections._connections) == 0
 
 
-async def test_cliente_conectado_recibe_round_settled_tras_el_post(
+async def test_connected_client_receives_round_settled_after_the_post(
     integration_settings: Settings,
 ) -> None:
     app = create_app(integration_settings)
@@ -107,7 +107,7 @@ async def test_cliente_conectado_recibe_round_settled_tras_el_post(
     assert message["round_id"] == round_id
 
 
-async def test_deposito_dispara_balance_updated(integration_settings: Settings) -> None:
+async def test_deposit_triggers_balance_updated(integration_settings: Settings) -> None:
     app = create_app(integration_settings)
     async with LifespanManager(app):
         transport = ASGIWebSocketTransport(app=app)
@@ -129,19 +129,19 @@ async def test_deposito_dispara_balance_updated(integration_settings: Settings) 
     assert message == {"type": "balance.updated", "balance_minor": 25_000, "currency": "EUR"}
 
 
-async def test_token_invalido_cierra_con_4401(integration_settings: Settings) -> None:
+async def test_invalid_token_closes_with_4401(integration_settings: Settings) -> None:
     app = create_app(integration_settings)
     async with LifespanManager(app):
         transport = ASGIWebSocketTransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             with pytest.raises(WebSocketDisconnect) as exc_info:
-                async with aconnect_ws("http://test/api/v1/ws?token=esto-no-es-un-jwt", client):
+                async with aconnect_ws("http://test/api/v1/ws?token=this-is-not-a-jwt", client):
                     pass
 
     assert exc_info.value.code == 4401
 
 
-async def test_sin_token_cierra_con_4401(integration_settings: Settings) -> None:
+async def test_no_token_closes_with_4401(integration_settings: Settings) -> None:
     app = create_app(integration_settings)
     async with LifespanManager(app):
         transport = ASGIWebSocketTransport(app=app)
@@ -153,7 +153,7 @@ async def test_sin_token_cierra_con_4401(integration_settings: Settings) -> None
     assert exc_info.value.code == 4401
 
 
-async def test_token_de_usuario_suspendido_cierra_con_4401(
+async def test_suspended_user_token_closes_with_4401(
     integration_settings: Settings,
 ) -> None:
     app = create_app(integration_settings)
@@ -174,7 +174,7 @@ async def test_token_de_usuario_suspendido_cierra_con_4401(
     assert exc_info.value.code == 4401
 
 
-async def test_limite_de_conexiones_cierra_con_4429(integration_settings: Settings) -> None:
+async def test_connection_limit_closes_with_4429(integration_settings: Settings) -> None:
     settings = integration_settings.model_copy(update={"WS_MAX_CONNECTIONS": 1})
     app = create_app(settings)
     async with LifespanManager(app):
@@ -191,7 +191,7 @@ async def test_limite_de_conexiones_cierra_con_4429(integration_settings: Settin
     assert exc_info.value.code == 4429
 
 
-async def test_pong_a_tiempo_mantiene_la_conexion_viva(integration_settings: Settings) -> None:
+async def test_a_timely_pong_keeps_the_connection_alive(integration_settings: Settings) -> None:
     settings = integration_settings.model_copy(
         update={"WS_HEARTBEAT_INTERVAL_S": 0.2, "WS_HEARTBEAT_TIMEOUT_S": 1.0}
     )
@@ -207,11 +207,11 @@ async def test_pong_a_tiempo_mantiene_la_conexion_viva(integration_settings: Set
                     message: dict[str, Any] = await asyncio.wait_for(ws.receive_json(), timeout=1)
                     assert message == {"type": "ping"}
                     await ws.send_json({"type": "pong"})
-            # si llegó hasta acá sin WebSocketDisconnect, la conexión
-            # sobrevivió a varios ciclos de heartbeat mientras hubo pong.
+            # if it got here without a WebSocketDisconnect, the connection
+            # survived several heartbeat cycles as long as there was a pong.
 
 
-async def test_conexion_zombie_se_cierra_por_heartbeat_timeout(
+async def test_a_zombie_connection_closes_on_heartbeat_timeout(
     integration_settings: Settings,
 ) -> None:
     settings = integration_settings.model_copy(
@@ -226,12 +226,11 @@ async def test_conexion_zombie_se_cierra_por_heartbeat_timeout(
             ws: AsyncWebSocketSession
             disconnected = False
             async with aconnect_ws(f"http://test/api/v1/ws?token={token}", client) as ws:
-                # nunca se manda pong: el servidor debe cerrar solo. La
-                # excepción se atrapa *dentro* del bloque a propósito: si
-                # cruza el `__aexit__` del context manager de httpx_ws, el
-                # task group interno de anyio la envuelve en un
-                # `ExceptionGroup` y `pytest.raises(WebSocketDisconnect)`
-                # ya no la reconoce.
+                # a pong is never sent: the server must close on its own.
+                # The exception is caught *inside* the block on purpose: if
+                # it crosses httpx_ws's context manager `__aexit__`, anyio's
+                # internal task group wraps it in an `ExceptionGroup` and
+                # `pytest.raises(WebSocketDisconnect)` no longer recognizes it.
                 try:
                     for _ in range(20):
                         await asyncio.wait_for(ws.receive_json(), timeout=2)
@@ -241,11 +240,12 @@ async def test_conexion_zombie_se_cierra_por_heartbeat_timeout(
             assert disconnected
 
 
-async def test_el_apagado_del_lifespan_cierra_las_conexiones_ws(
+async def test_lifespan_shutdown_closes_the_ws_connections(
     integration_settings: Settings,
 ) -> None:
-    """El DoD pide 'cierre ordenado': al apagar la app, un cliente conectado
-    recibe un cierre de verdad (código 1001), no un TCP cortado sin avisar.
+    """The DoD asks for an "orderly close": when the app shuts down, a
+    connected client receives a real close (code 1001), not a TCP
+    connection cut with no warning.
     """
     app = create_app(integration_settings)
     lifespan_cm = LifespanManager(app)

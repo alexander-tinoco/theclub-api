@@ -1,12 +1,12 @@
-"""Excepciones compartidas entre servicios."""
+"""Exceptions shared across services."""
 
 
 class DataIntegrityError(Exception):
-    """Un invariante que debería sostenerse siempre no se cumplió (p. ej. un
-    usuario autenticado sin wallet o sin seed pair activo — ambos se crean en
-    el registro, en la Fase 4 y la Fase 5). Nunca debería pasar en
-    circunstancias normales: si pasa, es un bug en otra parte del sistema, no
-    algo que el cliente pueda provocar. Se usa en vez de `assert` porque
-    Python descarta los `assert` con `-O`/`PYTHONOPTIMIZE` — un invariante de
-    negocio no debería depender de cómo se invoque el intérprete.
+    """An invariant that should always hold didn't (e.g. an authenticated
+    user with no wallet or no active seed pair — both are created at
+    registration, in Phase 4 and Phase 5). Should never happen under normal
+    circumstances: if it does, it's a bug elsewhere in the system, not
+    something the client could trigger. Used instead of `assert` because
+    Python drops `assert` under `-O`/`PYTHONOPTIMIZE` — a business
+    invariant shouldn't depend on how the interpreter was invoked.
     """

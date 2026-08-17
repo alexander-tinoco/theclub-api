@@ -1,7 +1,7 @@
-"""Los dos invariantes de dinero del plan, contra Postgres real:
+"""The plan's two money invariants, against a real Postgres:
 
-1. El balance del wallet siempre es igual a la suma del ledger.
-2. Débitos concurrentes sobre el mismo wallet nunca lo dejan en negativo.
+1. The wallet's balance always equals the sum of the ledger.
+2. Concurrent debits against the same wallet never leave it negative.
 """
 
 import asyncio
@@ -71,7 +71,7 @@ async def test_ledger_balance_invariant(db_session: AsyncSession) -> None:
     assert wallet_balance == ledger_sum == 10_000 - 500 + 1_800
 
 
-async def test_debit_insuficiente_no_mueve_el_balance(db_session: AsyncSession) -> None:
+async def test_insufficient_debit_does_not_move_the_balance(db_session: AsyncSession) -> None:
     wallet = await _create_user_with_wallet(db_session, balance_minor=100)
     wallets = WalletRepository(db_session)
 
@@ -95,7 +95,7 @@ async def test_get_by_user_id(db_session: AsyncSession) -> None:
     assert found.balance_minor == 250
 
 
-async def test_get_by_user_id_desconocido_devuelve_none(db_session: AsyncSession) -> None:
+async def test_get_by_user_id_for_an_unknown_user_returns_none(db_session: AsyncSession) -> None:
     wallets = WalletRepository(db_session)
 
     assert await wallets.get_by_user_id(uuid.uuid4()) is None
@@ -105,22 +105,22 @@ async def test_get_by_user_id_desconocido_devuelve_none(db_session: AsyncSession
 async def big_pool_session_factory(
     integration_settings: Settings,
 ) -> AsyncIterator[async_sessionmaker[AsyncSession]]:
-    """Motor propio con más conexiones que el pool por defecto (5): el test de
-    concurrencia necesita que varias tareas puedan tener, de verdad, una
-    conexión abierta cada una al mismo tiempo.
+    """Its own engine with more connections than the default pool (5): the
+    concurrency test needs several tasks to genuinely have their own
+    connection open at the same time.
     """
     engine = create_app_engine(integration_settings.DATABASE_URL, pool_size=25)
     yield create_session_factory(engine)
     await engine.dispose()
 
 
-async def test_debitos_concurrentes_nunca_sobregiran(
+async def test_concurrent_debits_never_overdraw(
     session_factory: async_sessionmaker[AsyncSession],
     big_pool_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     starting_balance = 1_000
     stake = 100
-    attempts = 20  # el doble de lo que el balance puede cubrir
+    attempts = 20  # double what the balance can cover
 
     async with session_factory() as setup_session:
         wallet = await _create_user_with_wallet(setup_session, balance_minor=starting_balance)

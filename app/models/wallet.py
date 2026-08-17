@@ -13,9 +13,10 @@ DEFAULT_CURRENCY = "EUR"
 
 
 class Wallet(Base):
-    """Sin columna de bloqueo optimista a propósito: el repositorio solo expone
-    `debit`/`credit` atómicos (UPDATE ... WHERE ... RETURNING), nunca un
-    read-modify-write, así que no hay carrera que un `version` deba prevenir.
+    """No optimistic-locking column on purpose: the repository only exposes
+    atomic `debit`/`credit` (UPDATE ... WHERE ... RETURNING), never a
+    read-modify-write, so there's no race a `version` column would need to
+    prevent.
     """
 
     __tablename__ = "wallets"
@@ -25,8 +26,8 @@ class Wallet(Base):
     balance_minor: Mapped[int] = mapped_column(BigInteger, default=0)
     currency: Mapped[str] = mapped_column(default=DEFAULT_CURRENCY)
 
-    # Comillas necesarias: ver la nota equivalente en user.py (User solo se
-    # importa bajo TYPE_CHECKING).
+    # Quotes required: see the equivalent note in user.py (User is only
+    # imported under TYPE_CHECKING).
     user: Mapped["User"] = relationship(back_populates="wallet")  # noqa: UP037
 
     __table_args__ = (CheckConstraint("balance_minor >= 0", name="balance_non_negative"),)

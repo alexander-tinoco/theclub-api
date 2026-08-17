@@ -1,18 +1,19 @@
-"""slowapi tiene un `Limiter(default_limits=[...])` que en teoría aplica un
-límite a cualquier ruta sin un `@limiter.limit(...)` propio, aplicado vía
-`SlowAPIMiddleware`. En esta versión de FastAPI (0.141) no funciona: el
-middleware recorre `app.routes` buscando el handler de cada ruta
-(`_find_route_handler`), y con el `_IncludedRouter` interno que usa esta
-versión, esa búsqueda nunca encuentra nada — `_should_exempt` trata cada
-petición como exenta, y `default_limits` nunca dispara, sin ningún error
-que lo delate.
+"""slowapi has a `Limiter(default_limits=[...])` that in theory applies a
+limit to any route without its own `@limiter.limit(...)`, applied via
+`SlowAPIMiddleware`. In this version of FastAPI (0.141) it doesn't work:
+the middleware walks `app.routes` looking for each route's handler
+(`_find_route_handler`), and with the internal `_IncludedRouter` this
+version uses, that search never finds anything — `_should_exempt` treats
+every request as exempt, and `default_limits` never fires, with no error
+to give it away.
 
-Por eso `GLOBAL_RATE_LIMIT` se aplica con `@limiter.limit(...)` explícito en
-cada ruta que antes no tenía límite propio — ese mecanismo no depende de
-`SlowAPIMiddleware` ni de `_find_route_handler`, y ya estaba probado que
-funciona (los endpoints de auth con límites propios desde la Fase 4). Este
-test prueba que una ruta que *antes* de este fix no tenía ningún límite
-(`/auth/me`) ahora sí lo tiene de verdad.
+That's why `GLOBAL_RATE_LIMIT` is applied with an explicit
+`@limiter.limit(...)` on every route that previously had no limit of its
+own — that mechanism doesn't depend on `SlowAPIMiddleware` or
+`_find_route_handler`, and it was already proven to work (the auth
+endpoints with their own limits since Phase 4). This test proves that a
+route which, *before* this fix, had no limit at all (`/auth/me`) now really
+does have one.
 """
 
 import uuid
@@ -27,7 +28,7 @@ from app.main import create_app
 pytestmark = pytest.mark.integration
 
 
-async def test_una_ruta_sin_limite_propio_ahora_si_limita(
+async def test_a_route_with_no_limit_of_its_own_now_gets_limited(
     integration_settings: Settings,
 ) -> None:
     app = create_app(integration_settings)
@@ -36,7 +37,7 @@ async def test_una_ruta_sin_limite_propio_ahora_si_limita(
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             email = f"{uuid.uuid4()}@example.com"
             register = await client.post(
-                "/api/v1/auth/register", json={"email": email, "password": "contraseña-larga"}
+                "/api/v1/auth/register", json={"email": email, "password": "a-long-password"}
             )
             headers = {"Authorization": f"Bearer {register.json()['access_token']}"}
 

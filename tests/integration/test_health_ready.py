@@ -1,7 +1,6 @@
-"""Cierra el hueco de cobertura que quedó anotado desde la Fase 0: el lifespan
-de FastAPI no se dispara con `ASGITransport` a secas, así que el check de
-Postgres en `/ready` nunca se había ejercitado de verdad hasta que existió una
-base de datos real que consultar.
+"""Closes the coverage gap noted since Phase 0: FastAPI's lifespan doesn't
+fire with plain `ASGITransport`, so the Postgres check in `/ready` had
+never really been exercised until a real database existed to query.
 """
 
 import pytest
@@ -14,7 +13,7 @@ from app.main import create_app
 pytestmark = pytest.mark.integration
 
 
-async def test_ready_reporta_database_ok_con_postgres_real(
+async def test_ready_reports_database_ok_with_a_real_postgres(
     integration_settings: Settings,
 ) -> None:
     app = create_app(integration_settings)

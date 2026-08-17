@@ -1,12 +1,12 @@
-"""DoD de la Fase 6, parte 2: si Redpanda cae, el juego sigue funcionando
-(el outbox acumula, sin perder dinero) y al volver el relay drena lo
-pendiente sin intervención manual.
+"""Phase 6's DoD, part 2: if Redpanda goes down, the game keeps working
+(the outbox accumulates, without losing money) and once it's back the
+relay drains what's pending with no manual intervention.
 
-A diferencia del resto de la suite, este test controla el contenedor real de
-Redpanda con `docker compose stop/start` — no hay mock de por medio, porque
-lo que queremos probar es justo el comportamiento ante una caída real de
-red/broker, no una excepción simulada. Usa un `try/finally` para garantizar
-que Redpanda vuelve a estar arriba aunque una aserción falle a mitad del test.
+Unlike the rest of the suite, this test controls the real Redpanda
+container with `docker compose stop/start` — no mock involved, because
+what we want to test is exactly the behavior under a real network/broker
+outage, not a simulated exception. Uses a `try/finally` to guarantee
+Redpanda is back up even if an assertion fails partway through the test.
 """
 
 import asyncio
@@ -38,8 +38,8 @@ def _reset_rate_limiter() -> None:
 
 
 def _compose(*args: str) -> None:
-    # Args fijos definidos en este archivo, no entrada del usuario: el
-    # comando y REDPANDA_SERVICE están hardcodeados en el módulo.
+    # Fixed args defined in this file, not user input: the command and
+    # REDPANDA_SERVICE are hardcoded in the module.
     subprocess.run(  # noqa: S603
         ["docker", "compose", *args],  # noqa: S607
         cwd=REPO_ROOT,
@@ -50,15 +50,15 @@ def _compose(*args: str) -> None:
 
 
 async def _wait_for_redpanda_ready(bootstrap_servers: str, timeout_seconds: float = 30.0) -> None:
-    """`docker compose start` devuelve el control antes de que el broker
-    termine de aceptar conexiones — hay que esperar activamente antes de
-    seguir, o el resto del test (y el siguiente que corra contra el mismo
-    Redpanda) puede toparse con un broker que técnicamente ya escucha en el
-    puerto pero todavía no terminó de elegir líder para cada partición.
+    """`docker compose start` returns control before the broker finishes
+    accepting connections — you have to actively wait before moving on, or
+    the rest of the test (and the next one that runs against the same
+    Redpanda) can run into a broker that's technically already listening on
+    the port but hasn't finished electing a leader for every partition yet.
 
-    Probar contra Postgres aquí (que nunca se detuvo) no serviría: hay que
-    intentar un `bootstrap()` real de Kafka, no otra dependencia que ya
-    estaba arriba todo el tiempo.
+    Testing against Postgres here (which was never stopped) wouldn't work:
+    it has to attempt a real Kafka `bootstrap()`, not some other dependency
+    that was up the whole time.
     """
     deadline = asyncio.get_event_loop().time() + timeout_seconds
     last_error: Exception | None = None
@@ -72,22 +72,22 @@ async def _wait_for_redpanda_ready(bootstrap_servers: str, timeout_seconds: floa
             await asyncio.sleep(1)
         finally:
             await producer.stop()
-    raise TimeoutError(f"Redpanda no volvió a tiempo: {last_error}")
+    raise TimeoutError(f"Redpanda didn't come back in time: {last_error}")
 
 
-async def test_apuesta_sobrevive_a_kafka_caido_y_el_relay_drena_al_volver(
+async def test_a_bet_survives_kafka_being_down_and_the_relay_drains_it_once_back(
     integration_settings: Settings,
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    """Reproduce el escenario real del plan: Redpanda está arriba cuando la
-    app arranca (el productor se conecta sin problema) y cae *a mitad* de
-    una tanda de apuestas — no antes de que la app exista. Esto es a
-    propósito: `AIOKafkaProducer.start()` no tolera un broker inalcanzable
-    al arrancar (lanza y tumba el lifespan completo), así que apagar
-    Redpanda *antes* de crear la app probaría un escenario distinto (caída
-    en el arranque) que no es el que describe el DoD de esta fase ni el que
-    cubre el diseño actual — queda anotado como límite conocido, no como
-    parte de este test.
+    """Reproduces the plan's real scenario: Redpanda is up when the app
+    starts (the producer connects fine) and goes down *midway* through a
+    round of bets — not before the app exists. This is on purpose:
+    `AIOKafkaProducer.start()` doesn't tolerate an unreachable broker at
+    startup (it raises and brings down the whole lifespan), so stopping
+    Redpanda *before* creating the app would test a different scenario
+    (a startup failure) that isn't what this phase's DoD describes nor
+    what the current design covers — noted as a known limitation, not
+    part of this test.
     """
     app = create_app(integration_settings)
     try:
@@ -97,20 +97,20 @@ async def test_apuesta_sobrevive_a_kafka_caido_y_el_relay_drena_al_volver(
                 email = f"{uuid.uuid4()}@example.com"
                 register = await client.post(
                     "/api/v1/auth/register",
-                    json={"email": email, "password": "contraseña-larga"},
+                    json={"email": email, "password": "a-long-password"},
                 )
                 headers = {"Authorization": f"Bearer {register.json()['access_token']}"}
 
                 _compose("stop", REDPANDA_SERVICE)
 
-                # No se afirma nada sobre /ready aquí a propósito: el check
-                # de Kafka (`partitions_for`) usa metadata de cluster ya
-                # cacheada por el productor, así que justo tras apagar el
-                # contenedor puede seguir devolviendo "ok" hasta que esa
-                # caché expire — no es una prueba fiable de caída inmediata.
-                # Lo que sí es determinista, y lo que importa para el DoD, es
-                # que apostar sigue funcionando y el outbox acumula sin
-                # publicar.
+                # Nothing is asserted about /ready here on purpose: the
+                # Kafka check (`partitions_for`) uses cluster metadata
+                # already cached by the producer, so right after stopping
+                # the container it can keep returning "ok" until that
+                # cache expires — not a reliable test of an immediate
+                # outage. What is deterministic, and what matters for the
+                # DoD, is that betting keeps working and the outbox
+                # accumulates without publishing.
                 deposit = await client.post(
                     "/api/v1/wallet/deposit",
                     json={"amount_minor": 100_000},
@@ -125,15 +125,15 @@ async def test_apuesta_sobrevive_a_kafka_caido_y_el_relay_drena_al_volver(
                 )
                 assert response.status_code == 201
 
-                # El resultado del giro es aleatorio (puede ganar o perder),
-                # así que lo único determinista es que el stake se movió:
-                # el balance ya no es el del depósito sin tocar.
+                # The spin's outcome is random (win or lose), so the only
+                # deterministic thing is that the stake moved: the balance
+                # is no longer the untouched deposit.
                 balance = await client.get("/api/v1/wallet/balance", headers=headers)
                 assert balance.json()["balance_minor"] != 100_000
 
-            # Se le da tiempo al relay a intentar publicar y fallar al menos
-            # una vez (confirma que reintentar contra un broker caído no
-            # revienta la tarea de fondo ni bloquea la app).
+            # Gives the relay time to attempt a publish and fail at least
+            # once (confirms retrying against a downed broker doesn't blow
+            # up the background task or block the app).
             await asyncio.sleep(1.5)
 
             async with session_factory() as session:
@@ -154,6 +154,6 @@ async def test_apuesta_sobrevive_a_kafka_caido_y_el_relay_drena_al_volver(
                     break
                 await asyncio.sleep(1)
 
-            assert all_published, "el relay no drenó el outbox tras volver Redpanda"
+            assert all_published, "the relay didn't drain the outbox after Redpanda came back"
     finally:
         _compose("start", REDPANDA_SERVICE)

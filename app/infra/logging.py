@@ -1,7 +1,7 @@
-"""Logging estructurado en JSON. Sin esto, correlacionar qué pasó en una
-petición concreta significa grepear timestamps a ojo — con `request_id` en
-cada línea (la canónica y cualquier log suelto de esa misma petición), un
-`jq 'select(.request_id == "...")'` alcanza.
+"""Structured JSON logging. Without this, correlating what happened during
+a given request means eyeballing timestamps with grep — with `request_id`
+on every line (the canonical one and any loose log from that same
+request), a `jq 'select(.request_id == "...")'` is enough.
 """
 
 import json
@@ -14,9 +14,10 @@ from app.api.request_context import request_id_var, user_id_var
 
 class JsonFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
-        # La línea canónica ya trae su propio dict armado (`bind_canonical`
-        # + lo que junta el middleware); no tiene sentido reconstruirlo aquí
-        # ni duplicar `request_id`/`user_id`, que ella ya incluye.
+        # The canonical line already comes with its own dict built
+        # (`bind_canonical` + what the middleware collects); no point
+        # rebuilding it here or duplicating `request_id`/`user_id`, which it
+        # already includes.
         canonical = getattr(record, "canonical", None)
         if canonical is not None:
             payload: dict[str, Any] = {

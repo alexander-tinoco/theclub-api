@@ -1,6 +1,6 @@
-"""Escribe eventos en la tabla outbox, dentro de la misma transacción que la
-mutación de negocio que los origina — nunca dual-write. El relay que los
-publica de verdad a Kafka llega en la Fase 6; hasta entonces se acumulan aquí.
+"""Writes events into the outbox table, within the same transaction as the
+business mutation that originates them — never a dual-write. The relay that
+actually publishes them to Kafka arrives in Phase 6; until then they pile up here.
 """
 
 import uuid
