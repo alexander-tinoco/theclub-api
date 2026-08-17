@@ -18,12 +18,14 @@ from app.api.errors import register_error_handlers
 from app.api.health import ReadinessRegistry
 from app.api.health import router as health_router
 from app.api.rate_limit import limiter
+from app.api.request_context import RequestContextMiddleware
 from app.api.v1.router import build_api_v1_router
 from app.config import Settings, get_settings
 from app.events.outbox_cleanup import purge_loop
 from app.events.relay import relay_loop
 from app.infra.db import create_engine, create_session_factory
 from app.infra.kafka import check_kafka, create_producer
+from app.infra.logging import configure_logging
 from app.ws.broadcaster import InMemoryBroadcaster
 from app.ws.connections import ConnectionRegistry
 
@@ -79,9 +81,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or get_settings()
-    logging.basicConfig(
-        level=settings.LOG_LEVEL, format="%(asctime)s %(levelname)s %(name)s %(message)s"
-    )
+    configure_logging(settings.LOG_LEVEL)
 
     app = FastAPI(
         title=settings.APP_NAME,
@@ -121,6 +121,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    # El último `add_middleware` queda más afuera en tiempo de ejecución
+    # (`Starlette.add_middleware` inserta cada uno al *principio* de su
+    # lista interna) — así ve la duración total real y el código de estado
+    # final de cualquier petición, sin importar en qué capa se generó la
+    # respuesta.
+    app.add_middleware(RequestContextMiddleware)
 
     register_error_handlers(app)
 

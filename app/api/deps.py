@@ -6,6 +6,7 @@ from typing import Annotated
 from fastapi import Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.api.request_context import bind_canonical, user_id_var
 from app.config import Settings
 from app.infra.db import unit_of_work
 from app.infra.security import InvalidTokenError, decode_access_token
@@ -73,6 +74,14 @@ async def get_current_user(request: Request, session: SessionDep, settings: Sett
         raise InvalidTokenError
     if user.status == "suspended":
         raise UserSuspendedError
+    user_id_var.set(str(user.id))
+    # `bind_canonical` además de `user_id_var`, no en vez de: `SlowAPIMiddleware`
+    # hereda de `BaseHTTPMiddleware`, que corre el resto de la petición en una
+    # tarea aparte — un `ContextVar.set()' ahí adentro nunca lo ve
+    # `RequestContextMiddleware` (por fuera de esa tarea) al armar la línea
+    # canónica, pero mutar el dict de `bind_canonical` sí, porque ese dict es
+    # el mismo objeto compartido, no una reasignación de contextvar.
+    bind_canonical(user_id=str(user.id))
     return user
 
 

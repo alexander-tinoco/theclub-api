@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.api.deps import BroadcasterDep, CurrentUserDep, SessionDep, SessionFactoryDep, SettingsDep
 from app.api.pagination import decode_cursor, encode_cursor
 from app.api.rate_limit import limiter
+from app.api.request_context import bind_canonical
 from app.domain.roulette.bets import Selection
 from app.domain.roulette.table import BetType
 from app.services import fairness as fairness_service
@@ -130,6 +131,15 @@ async def create_round(
     # el mismo round_id es un redibujo inofensivo, no un doble cobro (eso lo
     # impide `run_idempotent`, no esto).
     await broadcaster.publish(user.id, {"type": "round.settled", **result})
+
+    bind_canonical(
+        round_id=result["round_id"],
+        outcome=result["outcome"],
+        bet_count=len(result["bets"]),
+        won=any(bet["won"] for bet in result["bets"]),
+        total_stake_minor=result["total_stake_minor"],
+        net_minor=result["net_minor"],
+    )
     return result
 
 

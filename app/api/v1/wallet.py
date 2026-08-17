@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.api.deps import BroadcasterDep, CurrentUserDep, SessionDep, SessionFactoryDep, SettingsDep
 from app.api.pagination import decode_cursor, encode_cursor
 from app.api.rate_limit import limiter
+from app.api.request_context import bind_canonical
 from app.services import wallet as wallet_service
 from app.services.idempotency import IDEMPOTENCY_KEY_MAX_LENGTH, hash_request_body, run_idempotent
 from app.services.wallet import MAX_DEPOSIT_MINOR
@@ -119,4 +120,5 @@ async def deposit(
         work=work,
     )
     await broadcaster.publish(user.id, {"type": "balance.updated", **result})
+    bind_canonical(amount_minor=body.amount_minor, balance_minor=result["balance_minor"])
     return result

@@ -21,6 +21,7 @@ from typing import Any
 
 from fastapi import APIRouter, WebSocket
 
+from app.api.request_context import bind_canonical, user_id_var
 from app.config import Settings
 from app.infra.security import InvalidTokenError, TokenExpiredError, decode_access_token
 from app.repositories.users import UserRepository
@@ -102,11 +103,14 @@ async def ws_endpoint(websocket: WebSocket) -> None:
     if user_id is None:
         await websocket.close(code=CLOSE_UNAUTHORIZED)
         return
+    user_id_var.set(str(user_id))
+    bind_canonical(user_id=str(user_id))
 
     if not registry.try_register(websocket):
         await websocket.close(code=CLOSE_TOO_MANY_CONNECTIONS)
         return
 
+    close_reason = "disconnected_or_shutdown"
     try:
         # `accept()` va *dentro* del try a propósito: si el handshake falla
         # a medio camino (el cliente cierra la pestaña, un proxy corta la
@@ -122,12 +126,20 @@ async def ws_endpoint(websocket: WebSocket) -> None:
                 _receiver(websocket, timeout_s=settings.WS_HEARTBEAT_TIMEOUT_S)
             )
             try:
-                await asyncio.wait({sender, receiver}, return_when=asyncio.FIRST_COMPLETED)
+                done, _pending = await asyncio.wait(
+                    {sender, receiver}, return_when=asyncio.FIRST_COMPLETED
+                )
+                # El motivo real del cierre, para la línea canónica — no
+                # cambia qué le mandamos al cliente (siempre un cierre
+                # limpio), solo lo que queda en el log.
+                if receiver in done and isinstance(receiver.exception(), TimeoutError):
+                    close_reason = "heartbeat_timeout"
             finally:
                 sender.cancel()
                 receiver.cancel()
                 await asyncio.gather(sender, receiver, return_exceptions=True)
     finally:
         registry.unregister(websocket)
+        bind_canonical(close_reason=close_reason)
         with contextlib.suppress(Exception):
             await websocket.close()
