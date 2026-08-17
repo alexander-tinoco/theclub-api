@@ -54,7 +54,10 @@ async def _authenticate(websocket: WebSocket) -> uuid.UUID | None:
 
     try:
         user_id = decode_access_token(
-            token, secret=settings.JWT_SECRET.get_secret_value(), algorithm=settings.JWT_ALGORITHM
+            token,
+            secret=settings.JWT_SECRET.get_secret_value(),
+            algorithm=settings.JWT_ALGORITHM,
+            previous_secrets=[s.get_secret_value() for s in settings.JWT_PREVIOUS_SECRETS],
         )
     except (InvalidTokenError, TokenExpiredError) as exc:
         # `except (A, B):` sin nombre dispara un bug real de `ruff format`

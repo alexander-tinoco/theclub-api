@@ -10,6 +10,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from asgi_lifespan import LifespanManager
 from httpx import ASGITransport, AsyncClient
+from pydantic import SecretStr
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.rate_limit import limiter
@@ -168,6 +169,42 @@ async def test_me_con_firma_invalida(client: AsyncClient) -> None:
     )
 
     assert response.status_code == 401
+
+
+async def test_me_con_token_firmado_con_un_secreto_previo_rotado(
+    client: AsyncClient, integration_settings: Settings
+) -> None:
+    # El secreto "viejo" firma un token para un usuario real ya registrado
+    # con la app normal (misma base de datos) — simula un access token
+    # emitido justo antes de rotar JWT_SECRET, que debe seguir sirviendo
+    # mientras JWT_PREVIOUS_SECRETS lo mantenga.
+    register = await client.post("/api/v1/auth/register", json=_credentials())
+    me = await client.get(
+        "/api/v1/auth/me",
+        headers={"Authorization": f"Bearer {register.json()['access_token']}"},
+    )
+    user_id = uuid.UUID(me.json()["id"])
+
+    old_secret = "el-secreto-antes-de-rotar-de-al-menos-32-bytes"
+    old_token = create_access_token(
+        user_id, secret=old_secret, algorithm=integration_settings.JWT_ALGORITHM, ttl_seconds=900
+    )
+    rotated_settings = integration_settings.model_copy(
+        # `model_copy(update=...)` no revalida contra el tipo del campo (a
+        # diferencia de construir `Settings(...)` normal) — hay que darle ya
+        # el `SecretStr` que `JWT_PREVIOUS_SECRETS` espera, no un `str` a secas.
+        update={"JWT_PREVIOUS_SECRETS": [SecretStr(old_secret)]}
+    )
+    app = create_app(rotated_settings)
+    async with LifespanManager(app):
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as rotated_client:
+            response = await rotated_client.get(
+                "/api/v1/auth/me", headers={"Authorization": f"Bearer {old_token}"}
+            )
+
+    assert response.status_code == 200
+    assert response.json()["id"] == str(user_id)
 
 
 async def test_me_con_token_expirado(client: AsyncClient, integration_settings: Settings) -> None:

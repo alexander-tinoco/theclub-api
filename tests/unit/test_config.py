@@ -72,3 +72,28 @@ def test_local_acepta_cors_comodin() -> None:
     settings = Settings(APP_ENV="local", CORS_ORIGINS="*")
 
     assert settings.CORS_ORIGINS == ["*"]
+
+
+def test_jwt_previous_secrets_vacio_por_defecto() -> None:
+    settings = Settings()
+
+    assert settings.JWT_PREVIOUS_SECRETS == []
+
+
+def test_jwt_previous_secrets_acepta_lista_separada_por_comas() -> None:
+    settings = Settings(JWT_PREVIOUS_SECRETS="secreto-uno-de-al-menos-32-bytes,secreto-dos-de-32b")
+
+    assert [s.get_secret_value() for s in settings.JWT_PREVIOUS_SECRETS] == [
+        "secreto-uno-de-al-menos-32-bytes",
+        "secreto-dos-de-32b",
+    ]
+
+
+def test_prod_rechaza_un_secreto_previo_de_ejemplo() -> None:
+    with pytest.raises(ValidationError, match="valor de ejemplo"):
+        Settings(APP_ENV="prod", JWT_SECRET="x" * 48, JWT_PREVIOUS_SECRETS=PLACEHOLDER_SECRET)
+
+
+def test_prod_rechaza_un_secreto_previo_corto() -> None:
+    with pytest.raises(ValidationError, match="32 caracteres"):
+        Settings(APP_ENV="prod", JWT_SECRET="x" * 48, JWT_PREVIOUS_SECRETS="corto")

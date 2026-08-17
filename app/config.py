@@ -30,6 +30,7 @@ def _split_csv(value: Any) -> Any:
 
 
 CsvList = Annotated[list[str], BeforeValidator(_split_csv)]
+CsvSecretList = Annotated[list[SecretStr], BeforeValidator(_split_csv)]
 
 
 class Settings(BaseSettings):
@@ -73,6 +74,13 @@ class Settings(BaseSettings):
     JWT_ALGORITHM: str = "HS256"
     ACCESS_TOKEN_TTL_SECONDS: int = Field(default=900, ge=60)
     REFRESH_TOKEN_TTL_SECONDS: int = Field(default=60 * 60 * 24 * 14, ge=300)
+    # Rotación de JWT_SECRET (Fase 8): al rotar, el secreto viejo pasa aquí.
+    # Firmar usa solo JWT_SECRET; verificar prueba JWT_SECRET y luego estos,
+    # en orden, así un access token emitido segundos antes de rotar no
+    # invalida sesiones activas — solo hace falta mantener un secreto aquí
+    # mientras existan tokens sin caducar firmados con él (como mucho
+    # ACCESS_TOKEN_TTL_SECONDS después de sacarlo de uso).
+    JWT_PREVIOUS_SECRETS: CsvSecretList = []
 
     # --- juego y outbox (Fases 5 y 6) ---------------------------------------
     OUTBOX_POLL_INTERVAL_MS: int = Field(default=500, ge=50)
@@ -114,16 +122,29 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _check_production_secrets(self) -> Self:
-        """En staging/prod la app no arranca con secretos de ejemplo o débiles."""
+        """En staging/prod la app no arranca con secretos de ejemplo o débiles.
+
+        Incluye `JWT_PREVIOUS_SECRETS`: quien lo conozca puede forjar un
+        token que `decode_access_token` acepte igual que con el actual — no
+        es un secreto "solo de lectura", así que exige la misma fuerza.
+        """
         if not self.is_production:
             return self
-        secret = self.JWT_SECRET.get_secret_value()
-        if secret == PLACEHOLDER_SECRET:
-            raise ValueError(
-                f"JWT_SECRET sigue siendo el valor de ejemplo con APP_ENV={self.APP_ENV}"
-            )
-        if len(secret) < 32:
-            raise ValueError("JWT_SECRET debe tener al menos 32 caracteres fuera de local/test")
+        for secret_value in (
+            self.JWT_SECRET,
+            *self.JWT_PREVIOUS_SECRETS,
+        ):
+            secret = secret_value.get_secret_value()
+            if secret == PLACEHOLDER_SECRET:
+                raise ValueError(
+                    f"JWT_SECRET/JWT_PREVIOUS_SECRETS sigue con el valor de ejemplo "
+                    f"con APP_ENV={self.APP_ENV}"
+                )
+            if len(secret) < 32:
+                raise ValueError(
+                    "JWT_SECRET y JWT_PREVIOUS_SECRETS deben tener al menos 32 "
+                    "caracteres fuera de local/test"
+                )
         return self
 
     @model_validator(mode="after")

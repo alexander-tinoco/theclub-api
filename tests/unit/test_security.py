@@ -66,6 +66,42 @@ def test_decode_access_token_firma_invalida() -> None:
         )
 
 
+def test_decode_access_token_acepta_un_secreto_previo_rotado() -> None:
+    old_secret = "el-secreto-viejo-de-al-menos-32-bytes"
+    user_id = uuid.uuid4()
+    token = create_access_token(user_id, secret=old_secret, algorithm=ALGORITHM, ttl_seconds=900)
+
+    decoded = decode_access_token(
+        token, secret=SECRET, algorithm=ALGORITHM, previous_secrets=[old_secret]
+    )
+
+    assert decoded == user_id
+
+
+def test_decode_access_token_rechaza_si_no_matchea_ningun_secreto() -> None:
+    user_id = uuid.uuid4()
+    token = create_access_token(user_id, secret=SECRET, algorithm=ALGORITHM, ttl_seconds=900)
+
+    with pytest.raises(InvalidTokenError):
+        decode_access_token(
+            token,
+            secret="otro-secreto-completamente-distinto",
+            algorithm=ALGORITHM,
+            previous_secrets=["y-tampoco-es-este-otro-secreto-mas"],
+        )
+
+
+def test_decode_access_token_expirado_bajo_un_secreto_previo() -> None:
+    old_secret = "el-secreto-viejo-de-al-menos-32-bytes"
+    user_id = uuid.uuid4()
+    token = create_access_token(user_id, secret=old_secret, algorithm=ALGORITHM, ttl_seconds=-1)
+
+    with pytest.raises(TokenExpiredError):
+        decode_access_token(
+            token, secret=SECRET, algorithm=ALGORITHM, previous_secrets=[old_secret]
+        )
+
+
 def test_decode_access_token_malformado() -> None:
     with pytest.raises(InvalidTokenError):
         decode_access_token("esto-no-es-un-jwt", secret=SECRET, algorithm=ALGORITHM)

@@ -12,6 +12,7 @@ un token aleatorio de 256 bits no la necesita.
 import hashlib
 import secrets
 import uuid
+from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 
 import jwt
@@ -54,13 +55,28 @@ def create_access_token(
     return jwt.encode(payload, secret, algorithm=algorithm)
 
 
-def decode_access_token(token: str, *, secret: str, algorithm: str) -> uuid.UUID:
-    try:
-        payload = jwt.decode(token, secret, algorithms=[algorithm])
-    except jwt.ExpiredSignatureError as exc:
-        raise TokenExpiredError from exc
-    except jwt.InvalidTokenError as exc:
-        raise InvalidTokenError from exc
+def decode_access_token(
+    token: str, *, secret: str, algorithm: str, previous_secrets: Sequence[str] = ()
+) -> uuid.UUID:
+    """`secret` primero, `previous_secrets` después, en orden: así un token
+    firmado con un secreto ya rotado se sigue aceptando mientras siga en la
+    lista, sin que eso retrase la verificación de un token recién emitido
+    (el caso común). Con HS256 la firma nunca "matchea por accidente" bajo
+    un secreto que no es el suyo, así que la primera vez que un candidato
+    produce `ExpiredSignatureError` es porque *ese* era el secreto correcto
+    — ahí se corta, no tiene sentido seguir probando los demás.
+    """
+    payload = None
+    for candidate in (secret, *previous_secrets):
+        try:
+            payload = jwt.decode(token, candidate, algorithms=[algorithm])
+            break
+        except jwt.ExpiredSignatureError as exc:
+            raise TokenExpiredError from exc
+        except jwt.InvalidTokenError:
+            continue
+    if payload is None:
+        raise InvalidTokenError
 
     sub = payload.get("sub")
     if not isinstance(sub, str):

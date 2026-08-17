@@ -66,7 +66,10 @@ async def get_current_user(request: Request, session: SessionDep, settings: Sett
 
     token = auth_header.removeprefix("Bearer ")
     user_id = decode_access_token(
-        token, secret=settings.JWT_SECRET.get_secret_value(), algorithm=settings.JWT_ALGORITHM
+        token,
+        secret=settings.JWT_SECRET.get_secret_value(),
+        algorithm=settings.JWT_ALGORITHM,
+        previous_secrets=[s.get_secret_value() for s in settings.JWT_PREVIOUS_SECRETS],
     )
 
     user = await UserRepository(session).get_by_id(user_id)
