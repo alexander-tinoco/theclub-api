@@ -847,18 +847,21 @@ fallan en segundos sin esperar a que levanten Postgres/Redpanda/Redis):
 | `typecheck` | `make typecheck` — `mypy` en modo estricto |
 | `contracts` | `make openapi-check` — regenera `contracts/openapi.json` desde el código actual (`scripts/export_openapi.py`) y falla si diverge del commiteado |
 | `docker-build` | `docker build --target runtime .` — que el Dockerfile siga construyendo, sin publicar nada a ningún registro |
-| `test` | Postgres + Redis como `services:` de GitHub Actions, Redpanda levantado a mano (ver nota abajo); `alembic upgrade head` → `make db-check` → `make test-cov` |
+| `test` | `docker compose up -d postgres redis redpanda --wait`; `alembic upgrade head` → `make db-check` → `make test-cov` |
 
 Los mismos comandos que corre CI son los que expone `make check` — no hay una versión
 "para CI" y otra "para tu máquina" que puedan divergir en silencio.
 
-**Por qué Redpanda no va en `services:`**: ese mecanismo de GitHub Actions no permite
-pasarle un comando propio al contenedor, y Redpanda necesita `--advertise-kafka-addr` para
-anunciarse en `localhost` (el mismo listener "external" que ya usa `docker-compose.yml` para
-que el host pueda hablarle). Se levanta con `docker run --network host` en un paso aparte del
-job `test`, verificado con `rpk cluster health` antes de seguir. Confirmado a mano antes de
-comitear: exactamente el mismo comando, corrido en esta máquina fuera de compose, arranca
-sano.
+**Por qué `docker-compose.yml` y no `services:` de GitHub Actions**: la primera versión de
+este job usaba `services:` para Postgres/Redis y un `docker run` aparte para Redpanda (ese
+mecanismo no deja pasarle el comando propio que necesita para anunciarse en `localhost`) — y
+rompió en el primer PR real: `tests/integration/test_kafka_outage.py` apaga y levanta
+Redpanda con `docker compose stop/start redpanda` para probar una caída de broker real, y
+sin que fuera *ese* comando el que lo hubiera levantado, no encontraba el contenedor.
+Arreglado usando el mismo `docker-compose.yml` que en local para los tres servicios — `--wait`
+bloquea hasta que sus healthchecks pasan, igual que hace `depends_on: condition:
+service_healthy` para `api`. Menos "paridad con local" simulada a mano, y el test que ya
+existía volvió a pasar sin tocarlo.
 
 `fail_under = 95` en `pyproject.toml` (`[tool.coverage.report]`) es el piso real de
 cobertura, no un número decorativo — la cobertura actual (ver más abajo) está varios puntos
@@ -923,6 +926,7 @@ razonar el diseño encontró antes de que llegaran a ningún sitio importante:
 | 9 | El catch-all de excepciones no mapeadas estaba registrado como exception handler (`add_exception_handler(Exception, ...)`), pero Starlette manda esos handlers a `ServerErrorMiddleware` — la capa *más externa de todas*, por fuera de CORS y de `RequestContextMiddleware`. La respuesta a un 500 real nunca llevaba `Access-Control-Allow-Origin` ni `X-Request-ID`, y su línea canónica quedaba con `status_code: null` | `/security-review`, que de paso señaló que el orden de los middlewares en `app/main.py` era el contrario de lo que decía el propio comentario del código |
 | 10 | Arreglar el bug anterior (mover `RequestContextMiddleware` para que fuera el middleware más externo) rompió `user_id` en la línea canónica: quedó por fuera de `SlowAPIMiddleware`, que hereda de `BaseHTTPMiddleware` y corre el resto de la petición en una tarea de `asyncio` aparte — un `ContextVar.set()` ahí adentro (`user_id_var.set(...)`) nunca se propaga de vuelta a la tarea que arma la línea canónica | Un script mínimo reproduciendo el aislamiento de `contextvars` a través de `BaseHTTPMiddleware`, después de notar que el test de la línea canónica seguía en verde pero por una razón distinta a la esperada |
 | 11 | `Limiter(default_limits=[...])` no aplicaba ningún límite a ninguna ruta, nunca: `SlowAPIMiddleware` recorre `app.routes` para encontrar el handler de cada petición, y en esta versión de FastAPI (0.141) las rutas quedan envueltas en un `_IncludedRouter` interno que esa búsqueda no atraviesa — devuelve `None` siempre, y `slowapi` trata "no encontré el handler" como "ruta exenta", sin ningún error que lo delate | Verificando a mano que un `429` llevara headers de CORS (la misma pregunta que el bug 9, para `SlowAPIMiddleware`): funcionó contra `/auth/login` (que sí tiene límite propio) pero nunca contra una ruta que dependiera solo del límite global, ni bajando el límite a 3 peticiones/minuto para forzarlo |
+| 12 | La primera versión del job `test` de CI levantaba Redpanda con un `docker run` suelto (`services:` de GitHub Actions no permite pasarle `--advertise-kafka-addr`) — pero `tests/integration/test_kafka_outage.py` controla Redpanda con `docker compose stop/start redpanda`, y sin que fuera *ese* comando el que lo hubiera levantado, no encontraba ningún contenedor que parar | La primera corrida real del workflow en GitHub Actions — `make check` en la máquina de desarrollo nunca lo iba a reproducir, porque ahí Redpanda siempre estuvo levantado con `docker compose` |
 
 Ninguno lo encontró una revisión manual — todos salieron de escribir el siguiente
 test, la siguiente fase, de probar contra el contenedor real, o de una revisión

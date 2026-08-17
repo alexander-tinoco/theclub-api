@@ -57,33 +57,12 @@ jobs:
 
   test:
     runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:17-alpine
-        env:
-          POSTGRES_USER: theclub
-          POSTGRES_PASSWORD: theclub
-          POSTGRES_DB: theclub
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U theclub -d theclub"
-          --health-interval 5s
-          --health-timeout 3s
-          --health-retries 10
-      redis:
-        image: redis:7-alpine
-        ports:
-          - 6379:6379
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 5s
-          --health-timeout 3s
-          --health-retries 10
     env:
       APP_ENV: test
       DATABASE_URL: postgresql+psycopg://theclub:theclub@localhost:5432/theclub
-      REDIS_URL: redis://localhost:6379/0
+      # Sin .env en el checkout, docker-compose.yml usa su default
+      # (REDIS_PORT=6389) -- no el 6379 nativo del contenedor.
+      REDIS_URL: redis://localhost:6389/0
       KAFKA_BOOTSTRAP_SERVERS: localhost:19092
     steps:
       - uses: actions/checkout@v4
@@ -92,20 +71,14 @@ jobs:
           enable-cache: true
       - run: uv sync --locked
 
-      # Redpanda no puede ir en `services:`: ese mecanismo no permite pasarle
-      # el comando propio (`redpanda start --advertise-kafka-addr=...`) que
-      # necesita para anunciarse en localhost, así que se levanta a mano con
-      # --network host -- mismo listener "external" que docker-compose.yml
-      # usa para el host, mismo puerto (19092) que en local.
-      - name: Levantar Redpanda
-        run: |
-          docker run -d --name redpanda --network host \
-            redpandadata/redpanda:v24.2.7 \
-            redpanda start --mode dev-container --smp 1 --default-log-level=warn \
-            --kafka-addr=PLAINTEXT://0.0.0.0:19092 \
-            --advertise-kafka-addr=PLAINTEXT://localhost:19092
-      - name: Esperar a que Redpanda esté sano
-        run: timeout 60 bash -c 'until docker exec redpanda rpk cluster health | grep -q "Healthy:.*true"; do sleep 2; done'
+      # El mismo docker-compose.yml que en local, no un `docker run` aparte:
+      # tests/integration/test_kafka_outage.py controla Redpanda con
+      # `docker compose stop/start redpanda` -- necesita que sea *ese*
+      # comando el que lo haya levantado, o no encuentra el contenedor.
+      # `--wait` bloquea hasta que los tres healthchecks pasan, igual que
+      # hace `depends_on: condition: service_healthy` para `api` en local.
+      - name: Levantar Postgres, Redis y Redpanda
+        run: docker compose up -d postgres redis redpanda --wait
 
       - name: Migrar la base de datos
         run: make db-upgrade
