@@ -107,8 +107,13 @@ async def ws_endpoint(websocket: WebSocket) -> None:
         await websocket.close(code=CLOSE_TOO_MANY_CONNECTIONS)
         return
 
-    await websocket.accept()
     try:
+        # `accept()` va *dentro* del try a propósito: si el handshake falla
+        # a medio camino (el cliente cierra la pestaña, un proxy corta la
+        # conexión), el cupo reservado por `try_register` de todos modos se
+        # libera en el `finally` — si no, cada handshake fallido deja un
+        # hueco fantasma en `WS_MAX_CONNECTIONS` para siempre.
+        await websocket.accept()
         async with broadcaster.subscribe(user_id) as queue:
             sender = asyncio.create_task(
                 _sender(websocket, queue, interval_s=settings.WS_HEARTBEAT_INTERVAL_S)

@@ -16,8 +16,10 @@ from httpx import AsyncClient
 from httpx_ws import AsyncWebSocketSession, WebSocketDisconnect, aconnect_ws
 from httpx_ws.transport import ASGIWebSocketTransport
 from sqlalchemy import update
+from starlette.datastructures import Address
 
 from app.api.rate_limit import limiter
+from app.api.v1.ws import ws_endpoint
 from app.config import Settings
 from app.main import create_app
 from app.models.user import User
@@ -39,6 +41,45 @@ async def _register(client: AsyncClient) -> tuple[str, str]:
     token: str = register.json()["access_token"]
     me = await client.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {token}"})
     return token, me.json()["id"]
+
+
+class _FailingAcceptWebSocket:
+    """Doble mínimo de `WebSocket` cuyo `accept()` falla a medio handshake
+    — simula un cliente que cierra la pestaña o un proxy que corta la
+    conexión justo en ese momento, sin necesitar un cliente real que se
+    desconecte con ese timing exacto.
+    """
+
+    def __init__(self, app: object, token: str) -> None:
+        self.app = app
+        self.query_params = {"token": token}
+        self.client = Address(host="127.0.0.1", port=12345)
+
+    async def accept(self) -> None:
+        raise RuntimeError("handshake abortado a mitad de camino")
+
+    async def close(self, code: int = 1000) -> None:
+        pass
+
+
+async def test_si_falla_el_accept_no_deja_el_cupo_de_conexion_ocupado(
+    integration_settings: Settings,
+) -> None:
+    """Regresión: `accept()` tiene que estar dentro del try/finally que
+    desregistra la conexión — si no, un handshake que falla a medio camino
+    deja el cupo de `WS_MAX_CONNECTIONS` ocupado para siempre.
+    """
+    app = create_app(integration_settings)
+    async with LifespanManager(app):
+        transport = ASGIWebSocketTransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            token, _ = await _register(client)
+
+        fake_ws = _FailingAcceptWebSocket(app, token)
+        with contextlib.suppress(RuntimeError):
+            await ws_endpoint(fake_ws)  # type: ignore[arg-type]
+
+        assert len(app.state.ws_connections._connections) == 0
 
 
 async def test_cliente_conectado_recibe_round_settled_tras_el_post(
