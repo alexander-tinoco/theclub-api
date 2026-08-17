@@ -4,7 +4,7 @@ from collections.abc import AsyncIterator
 from typing import Annotated
 
 from fastapi import Depends, Request
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.config import Settings
 from app.infra.db import unit_of_work
@@ -37,6 +37,18 @@ async def get_session(request: Request) -> AsyncIterator[AsyncSession]:
 
 
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
+
+
+def get_session_factory(request: Request) -> async_sessionmaker[AsyncSession]:
+    """La fábrica de sesiones en sí, no una sesión ya abierta — la necesitan
+    los endpoints que pasan por `run_idempotent` (place_bet, deposit), que
+    abren varias transacciones independientes dentro de la misma petición.
+    """
+    factory: async_sessionmaker[AsyncSession] = request.app.state.db_session_factory
+    return factory
+
+
+SessionFactoryDep = Annotated[async_sessionmaker[AsyncSession], Depends(get_session_factory)]
 
 
 async def get_current_user(request: Request, session: SessionDep, settings: SettingsDep) -> User:

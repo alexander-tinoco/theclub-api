@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import ForeignKey, UniqueConstraint, func
+from sqlalchemy import CheckConstraint, ForeignKey, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -21,4 +21,7 @@ class IdempotencyKey(Base):
     expires_at: Mapped[datetime]
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
 
-    __table_args__ = (UniqueConstraint("user_id", "key", name="uq_user_idempotency_key"),)
+    __table_args__ = (
+        UniqueConstraint("user_id", "key", name="uq_user_idempotency_key"),
+        CheckConstraint("status IN ('pending', 'completed')", name="valid_status"),
+    )

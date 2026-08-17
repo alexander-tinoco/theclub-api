@@ -11,6 +11,7 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings
+from app.domain.fairness import hash_seed, new_server_seed
 from app.infra.security import (
     InvalidTokenError,
     TokenExpiredError,
@@ -23,7 +24,9 @@ from app.infra.security import (
 from app.models.user import User
 from app.models.wallet import Wallet
 from app.repositories.refresh_tokens import RefreshTokenRepository
+from app.repositories.seed_pairs import SeedPairRepository
 from app.repositories.users import UserRepository
+from app.services.fairness import generate_client_seed
 
 
 class EmailAlreadyExistsError(Exception):
@@ -59,6 +62,18 @@ async def register_user(
 
     user = await users.create(email=email, password_hash=hash_password(password))
     session.add(Wallet(user_id=user.id, balance_minor=0))
+
+    # Sin esto no hay hash publicado y no se puede apostar de forma
+    # verificable: el primer par de semillas se crea aquí, no de forma
+    # perezosa en el primer giro, para que el hash exista desde el registro.
+    server_seed = new_server_seed()
+    await SeedPairRepository(session).create_active(
+        user_id=user.id,
+        server_seed=server_seed,
+        server_seed_hash=hash_seed(server_seed),
+        client_seed=generate_client_seed(),
+    )
+
     await session.flush()
 
     tokens = await _issue_tokens(session, settings, user_id=user.id, family_id=uuid.uuid4())

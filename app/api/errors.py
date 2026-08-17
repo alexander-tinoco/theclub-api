@@ -11,13 +11,16 @@ from fastapi import FastAPI, Request, status
 from fastapi.responses import JSONResponse
 from starlette.responses import Response
 
+from app.domain.roulette.bets import InvalidBetError
 from app.infra.security import InvalidTokenError, TokenExpiredError
+from app.repositories.wallets import InsufficientFundsError
 from app.services.auth import (
     EmailAlreadyExistsError,
     InvalidCredentialsError,
     RefreshTokenReusedError,
     UserSuspendedError,
 )
+from app.services.idempotency import IdempotencyInProgressError, IdempotencyKeyConflictError
 
 ExceptionHandler = Callable[[Request, Exception], Awaitable[Response]]
 
@@ -28,6 +31,16 @@ _ERROR_MAP: dict[type[Exception], tuple[int, str]] = {
     TokenExpiredError: (status.HTTP_401_UNAUTHORIZED, "el token ha caducado"),
     InvalidTokenError: (status.HTTP_401_UNAUTHORIZED, "token inválido"),
     RefreshTokenReusedError: (status.HTTP_401_UNAUTHORIZED, "sesión revocada"),
+    InvalidBetError: (status.HTTP_422_UNPROCESSABLE_CONTENT, "apuesta inválida"),
+    InsufficientFundsError: (status.HTTP_409_CONFLICT, "saldo insuficiente"),
+    IdempotencyKeyConflictError: (
+        status.HTTP_409_CONFLICT,
+        "Idempotency-Key ya usada con un cuerpo de petición distinto",
+    ),
+    IdempotencyInProgressError: (
+        status.HTTP_409_CONFLICT,
+        "ya hay una petición con esta misma Idempotency-Key en curso",
+    ),
 }
 
 

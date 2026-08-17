@@ -65,10 +65,19 @@ make db-revision m="mensaje"  # autogenera una migración a partir de los modelo
 - `GET /health` — *liveness*. No consulta ninguna dependencia; si responde, el proceso vive.
 - `GET /ready` — *readiness*. Ejecuta los checks registrados y devuelve `503` si alguno falla.
   Desde la Fase 3 registra `database` (un `SELECT 1` contra Postgres); la Fase 6 añadirá `kafka`.
-- `POST /api/v1/auth/register` — email + password → crea `User` + `Wallet` en cero, devuelve tokens.
+- `POST /api/v1/auth/register` — email + password → crea `User` + `Wallet` en cero + el primer
+  `SeedPair` activo, devuelve tokens.
 - `POST /api/v1/auth/login` — email + password → tokens.
 - `POST /api/v1/auth/refresh` — rota el refresh token (ver más abajo).
 - `GET /api/v1/auth/me` — requiere `Authorization: Bearer <access_token>`.
+- `GET /api/v1/roulette/fairness/current` — hash del seed activo + client_seed.
+- `POST /api/v1/roulette/fairness/rotate` — revela el seed anterior, activa uno nuevo.
+- `POST /api/v1/roulette/rounds` — coloca una o más apuestas y resuelve la ronda en la misma
+  petición. `Idempotency-Key` obligatorio.
+- `GET /api/v1/roulette/rounds` — historial, paginado por cursor.
+- `GET /api/v1/wallet/balance` — `{balance_minor, currency}`.
+- `GET /api/v1/wallet/transactions` — el ledger, paginado por cursor.
+- `POST /api/v1/wallet/deposit` — depósito simulado. `Idempotency-Key` obligatorio también.
 
 `/auth/register` y `/auth/login` están limitados a 5 peticiones/minuto por IP;
 `/auth/refresh` a 10/minuto.
@@ -83,15 +92,21 @@ depende de él, nunca al revés:
 flowchart TB
     subgraph API["app/api — HTTP"]
         health["health.py<br/>/health · /ready"]
-        authapi["v1/auth.py<br/>/auth/register · /login · /refresh · /me"]
+        authapi["v1/auth.py<br/>/auth/*"]
+        rouletteapi["v1/roulette.py<br/>/roulette/fairness/* · /roulette/rounds"]
+        walletapi["v1/wallet.py<br/>/wallet/*"]
     end
 
     subgraph SERVICES["app/services — casos de uso"]
-        authsvc["auth.py<br/>register_user · login · refresh_access_token"]
+        authsvc["auth.py"]
+        roulettesvc["roulette.py<br/>place_bet"]
+        walletsvc["wallet.py"]
+        idempotencysvc["idempotency.py<br/>run_idempotent — 3 transacciones"]
     end
 
     subgraph EVENTS["app/events — contratos hacia Kafka"]
         schemas["schemas.py<br/>EventEnvelope, BetPlacedData,<br/>RoundSettledData, WalletTransactionData"]
+        outbox["outbox.py<br/>enqueue_event"]
     end
 
     subgraph DOMAIN["app/domain — nucleo puro, sin IO"]
@@ -104,7 +119,7 @@ flowchart TB
 
     subgraph PERSISTENCE["app/models + app/repositories + app/infra"]
         models["models/*<br/>User · Wallet · LedgerEntry · SeedPair<br/>Round · Bet · IdempotencyKey · OutboxEvent · RefreshToken"]
-        repos["repositories/*<br/>Wallet · Ledger · User · RefreshToken"]
+        repos["repositories/*<br/>Wallet · Ledger · User · RefreshToken<br/>SeedPair · Round · Idempotency"]
         db_infra["infra/db.py<br/>engine async · unit_of_work"]
         security["infra/security.py<br/>argon2id · JWT"]
     end
@@ -117,11 +132,20 @@ flowchart TB
 
     EVENTS --> DOMAIN
     authapi --> authsvc
+    rouletteapi --> idempotencysvc
+    rouletteapi --> roulettesvc
+    walletapi --> idempotencysvc
+    walletapi --> walletsvc
+    idempotencysvc --> repos
+    roulettesvc --> engine
+    roulettesvc --> repos
+    roulettesvc --> outbox
+    walletsvc --> repos
+    walletsvc --> outbox
     authsvc --> repos
     authsvc --> security
     health --> db_infra
-    API -. Fase 5 .-> DOMAIN
-    EVENTS -. Fase 6 .-> KAFKA
+    outbox -. Fase 6 .-> KAFKA
 
     repos --> models
     repos --> db_infra
@@ -297,6 +321,51 @@ sequenceDiagram
     A-->>C: 401 -- la sesión completa quedó cerrada
 ```
 
+### El caso de uso de apostar
+
+`POST /roulette/rounds` y `POST /wallet/deposit` comparten el mismo mecanismo de
+idempotencia (`app/services/idempotency.py`), pensado para que **dos peticiones
+verdaderamente simultáneas** con la misma `Idempotency-Key` — no solo un reintento
+secuencial — nunca ejecuten el negocio dos veces. Son tres transacciones
+independientes, no una:
+
+```mermaid
+sequenceDiagram
+    participant C as Cliente
+    participant I as run_idempotent
+    participant DB as Postgres
+
+    Note over C,DB: Dos peticiones idénticas llegan casi a la vez
+
+    par Petición A
+        C->>I: POST /rounds (Idempotency-Key: K)
+        I->>DB: TX1 -- INSERT idempotency_keys (status=pending)
+        DB-->>I: OK, fila reservada
+        I->>DB: TX2 -- place_bet() + UPDATE status=completed
+        DB-->>I: commit
+        I-->>C: 201, respuesta real
+    and Petición B (mismo K, casi al mismo tiempo)
+        C->>I: POST /rounds (Idempotency-Key: K)
+        I->>DB: TX1 -- INSERT idempotency_keys (status=pending)
+        DB-->>I: UNIQUE(user_id, key) choca -- Postgres lo impide, no la app
+        I->>DB: leer la fila que ganó A
+        I-->>C: 409 (o la respuesta de A si ya estaba 'completed')
+    end
+```
+
+Si `place_bet()` falla (fondos insuficientes, etc.), TX2 completa se revierte —
+pero la fila `pending` de TX1 ya estaba comprometida aparte y queda huérfana. Una
+tercera transacción la borra antes de devolver el error, para que un reintento
+posterior con la misma clave no se quede viendo un "en curso" que ya no lo está.
+Y si el proceso que reservó la clave muere a media ejecución (nunca llega ni a
+completar ni a fallar limpiamente), la fila `pending` no bloquea para siempre:
+pasados 30 segundos se considera abandonada y se reclama.
+
+Verificado con un test que lanza 10 peticiones *de verdad* concurrentes
+(`asyncio.gather`, no un bucle secuencial) contra el mismo endpoint con la misma
+clave, y comprueba en la base de datos que se creó exactamente una ronda y se
+debitó el stake exactamente una vez.
+
 ## Calidad y testing
 
 ### Metodología
@@ -340,7 +409,7 @@ escribimos a mano, sigue linteado normalmente.
 
 ### Bugs reales encontrados durante el desarrollo
 
-No es una lista de virtudes — son tres errores que el propio proceso de escribir tests y
+No es una lista de virtudes — son cuatro errores que el propio proceso de escribir tests y
 razonar el diseño encontró antes de que llegaran a ningún sitio importante:
 
 | Fase | Qué estaba mal | Cómo se encontró |
@@ -348,27 +417,28 @@ razonar el diseño encontró antes de que llegaran a ningún sitio importante:
 | 1 | `payout_minor` no devolvía el stake apostado — un 35:1 pagaba 34x en vez de 35x | Al diseñar la Fase 2 y derivar la fórmula desde cero |
 | 3 | Las columnas de fecha eran `TIMESTAMP` sin zona horaria, contra lo que el propio plan decía ("todos los timestamps en TIMESTAMPTZ UTC") | Al necesitar comparar `datetime.now(UTC)` con `expires_at` en la Fase 4 |
 | 4 | Revocar la familia entera de refresh tokens al detectar un reuso no sobrevivía: el rollback automático de la transacción deshacía la revocación justo antes de guardarla | Un test de integración que reintentaba el token ya rotado tras el "robo" |
+| 5 | Al reclamar una fila `idempotency_keys` abandonada, un `session.begin()` chocaba contra la transacción que SQLAlchemy ya había auto-iniciado con el `SELECT` anterior — habría sido un 500 permanente la primera vez que un proceso muriera a medio camino | Un test que simula esa fila abandonada a mano y comprueba que el reclamo de verdad ejecuta el negocio |
 
-Ninguno lo encontró una revisión manual — los tres salieron de escribir el siguiente test
-o la siguiente fase y darse cuenta de que algo no cuadraba.
+Ninguno lo encontró una revisión manual — los cuatro salieron de escribir el siguiente
+test o la siguiente fase y darse cuenta de que algo no cuadraba.
 
 ### Cobertura
 
 ```
-TOTAL   771 stmts   5 miss   80 branch   4 partial   99% cover
+TOTAL   1148 stmts   7 miss   110 branch   6 partial   99% cover
 ```
 
 Sin umbral mínimo en CI todavía (`pytest-cov` está configurado; el `--cov-fail-under`
-se decide en la Fase 9). Los dos huecos que quedan están identificados, no son
-descuido:
+se decide en la Fase 9). Los huecos que quedan están identificados, no son descuido:
 
 | Dónde | Qué falta cubrir | Por qué |
 |---|---|---|
 | `app/domain/fairness.py` | La rama de rejection sampling que pide un HMAC extra | Probabilidad ~10⁻⁹ de que ocurra; forzarla exigiría mockear `hmac` para un caso de valor dudoso |
 | `app/api/health.py` | El timeout de un readiness check | Necesitaría un check que duerma de verdad; el camino de "check que falla" sí está cubierto |
+| `app/services/idempotency.py` | Dos micro-carreras dentro de la propia carrera (dos reclamos simultáneos de la misma fila abandonada; el fallback final tras un segundo choque) | Exigiría inyectar temporización falsa para forzar un instante exacto; el mecanismo principal sí está probado bajo concurrencia real |
 
 ## Estado
 
 Completadas: Fase 0 (fundación), Fase 1 (contratos de eventos), Fase 2 (dominio de
-fairness y ruleta), Fase 3 (persistencia), Fase 4 (autenticación). Siguiente: Fase 5 —
-el caso de uso de apostar (idempotencia, débito/crédito atómico, outbox).
+fairness y ruleta), Fase 3 (persistencia), Fase 4 (autenticación), Fase 5 (el caso de
+uso de apostar). Siguiente: Fase 6 — Kafka de verdad (productor + relay del outbox).
