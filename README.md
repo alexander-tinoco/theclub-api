@@ -83,10 +83,14 @@ make db-revision m="mensaje"  # autogenera una migración a partir de los modelo
 - `POST /api/v1/wallet/deposit` — depósito simulado. `Idempotency-Key` obligatorio también.
 - `GET /api/v1/ws?token=<access_token>` — WebSocket. Empuja `round.settled` y `balance.updated`
   al usuario dueño del token en cuanto su apuesta o depósito comprometen. Token inválido, ausente
-  o de un usuario suspendido → cierre `4401`; límite de conexiones alcanzado → cierre `4429`.
+  o de un usuario suspendido → cierre `4401`; límite de conexiones o de intentos de conexión
+  alcanzado → cierre `4429`.
+- `GET /metrics` — métricas en formato Prometheus. Sin autenticación a propósito (ver la sección
+  de endurecimiento) — se restringe a nivel de red en un despliegue real, no con un token.
 
 `/auth/register` y `/auth/login` están limitados a 5 peticiones/minuto por IP;
-`/auth/refresh` a 10/minuto.
+`/auth/refresh` a 10/minuto; el resto de los endpoints HTTP, a 200/minuto por IP por defecto
+(desde la Fase 8 — antes no tenían ningún límite).
 
 ## Arquitectura
 
@@ -607,6 +611,162 @@ servidor ASGI real — exactamente el hueco que tapa la verificación manual con
 `docker compose up`. Se arregló añadiendo `websockets` como dependencia explícita de
 producción (no de test) en `pyproject.toml`.
 
+### Endurecimiento y observabilidad
+
+Logging estructurado en JSON (`app/infra/logging.py`) con **líneas canónicas**: en vez de
+ir juntando la historia de una petición desde varios `logger.info` sueltos y dispersos,
+`RequestContextMiddleware` (`app/api/request_context.py`) junta **una sola línea** por
+petición HTTP (al responder) o por conexión WS (al cerrarse), con todo lo que importó —
+`request_id`, `user_id`, método, path, código de estado, duración, y lo que la propia
+ruta haya agregado con `bind_canonical(**campos)` (p. ej. `create_round` agrega
+`round_id`, `outcome`, `won`; `deposit` agrega `amount_minor`). `request_id`/`user_id`
+viven en `contextvars`, no en un objeto pasado a mano por cada función — así cualquier
+capa puede enriquecer la línea sin que su firma tenga que aceptar un parámetro de
+logging que no le interesa para nada más.
+
+```mermaid
+sequenceDiagram
+    participant C as Cliente
+    participant M as RequestContextMiddleware
+    participant R as Ruta (p. ej. POST /rounds)
+    participant L as canonical_logger
+
+    C->>M: petición HTTP
+    M->>M: request_id = uuid4() (contextvar)
+    M->>R: pasa la petición
+    R->>R: user_id_var.set(...) (al autenticar)
+    R->>R: bind_canonical(round_id=..., won=...)
+    R-->>M: respuesta (200/4xx/5xx)
+    M->>L: UNA línea: {request_id, user_id, method,<br/>path, status_code, duration_ms, round_id, won...}
+    M-->>C: respuesta + header X-Request-ID
+```
+
+ASGI puro, no `BaseHTTPMiddleware`: Starlette salta por completo `BaseHTTPMiddleware`
+para conexiones WebSocket, así que con esa base `/ws` se habría quedado sin
+`request_id` ni línea canónica — con ASGI puro, los dos scopes (`http` y `websocket`)
+pasan por el mismo middleware.
+
+Un manejador global nuevo en `app/api/errors.py` (`_handle_unexpected_error`) atrapa
+cualquier excepción que no esté en el mapa de errores conocidos — por definición, un bug
+de verdad, no algo que el cliente provocó a propósito. Se registra con el stack trace
+completo (nivel ERROR) pero la respuesta nunca incluye `str(exc)`: siempre
+`{"detail": "error interno"}`.
+
+Otras piezas de esta fase:
+
+- **CORS restringido** — `allow_methods`/`allow_headers` pasaron de `["*"]` a la lista
+  real que la API usa (`GET`, `POST`; `Authorization`, `Content-Type`,
+  `Idempotency-Key`). Un validador nuevo en `Settings` rechaza `CORS_ORIGINS="*"` fuera
+  de local/test — la combinación con `allow_credentials=True` es justo la que los
+  navegadores ya rechazan; mejor que la app no arranque a que sea un CORS roto (o
+  abierto) descubierto en producción.
+- **Rate limiting global** — `GLOBAL_RATE_LIMIT = "200/minute"` cubre cualquier endpoint
+  que hasta ahora no tenía límite propio (`/fairness/*`, `/rounds` GET, `/transactions`,
+  `/balance`, `/auth/me`, `/auth/logout`), con `@limiter.limit(GLOBAL_RATE_LIMIT)`
+  explícito en cada uno — **no** con `Limiter(default_limits=[...])`, que es como
+  arrancó esta pieza y resultó no funcionar en absoluto (ver el bug más abajo).
+  `app/ws/rate_limit.py` es, aparte, un limitador propio y deliberadamente más simple
+  (ventana fija por IP, no deslizante) solo para los *intentos de conexión* a `/ws` —
+  `SlowAPIMiddleware` hereda de `BaseHTTPMiddleware`, que Starlette no ejecuta para
+  conexiones WebSocket, así que ningún mecanismo de `slowapi` llega ahí.
+- **Límite de tamaño de body** — `MaxBodySizeMiddleware` (`app/api/middleware.py`)
+  rechaza con `413` antes de que Pydantic vea el body si `Content-Length` supera
+  `MAX_REQUEST_BODY_BYTES` (1MB por defecto). Límite conocido y documentado: un cliente
+  que mienta el `Content-Length`, o mande el body sin ese header (*chunked encoding*), lo
+  esquiva — en un despliegue real esto se refuerza en el proxy/load balancer también, no
+  solo en la app.
+- **`/metrics`** — contadores y un histograma de duración por petición HTTP (via el mismo
+  `RequestContextMiddleware`), más el conteo de conexiones WS activas/totales y de rondas
+  jugadas (`app/infra/metrics.py`, con `prometheus_client`). Marcado "opcional" en el plan
+  y sin Prometheus/Grafana todavía en el `docker-compose` que lo consuma — se construyó
+  igual porque exponerlo bien es barato con la librería estándar.
+
+Un bug real, encontrado escribiendo el test de la línea canónica, no por el propio
+código de esta fase: la fixture de sesión de los tests de integración corre
+`alembic upgrade head` **en el mismo proceso** que pytest (a diferencia de producción,
+donde Alembic es un comando aparte — `make db-upgrade`). `alembic/env.py` llamaba a
+`fileConfig()` con su valor por defecto, `disable_existing_loggers=True`, que desactiva
+cualquier logger ya creado en ese momento y no listado en `alembic.ini`. Como pytest
+importa toda la app (creando sus loggers de módulo) antes de que corriera esa fixture,
+**todo el logging de la aplicación quedaba silenciosamente descartado durante la suite
+entera** — no se veía en ningún lado, sin ningún error. Se arregló pasando
+`disable_existing_loggers=False`, con un test que lo deja fijado
+(`test_alembic_no_desactiva_loggers_de_la_app`).
+
+De paso, `uvicorn.access` (el log de acceso propio de uvicorn) quedó fuera del JSON: es
+un logger aparte, configurado por uvicorn mismo con su propio formato de texto, ajeno a
+`app/infra/logging.py`. En vez de perseguirlo para que hable JSON, se desactivó con
+`--no-access-log` en el `CMD` del `Dockerfile` — la línea canónica de cada petición ya
+cubre lo mismo (y más: `request_id`, `user_id`, campos de negocio) en el mismo formato
+que el resto. `make dev` conserva el access log de uvicorn tal cual: en local, legible a
+ojo importa más que el formato consistente.
+
+### Tres bugs que no encontró ningún test antes de cerrar la fase
+
+El DoD de esta fase pide correr una revisión de seguridad completa antes de cerrarla.
+La de seguridad no encontró vulnerabilidades explotables, pero de paso señaló algo que
+no era una vulnerabilidad — era un bug de diseño real en el propio middleware de esta
+fase, la de código encontró otro, y verificar a mano el arreglo del primero destapó un
+tercero que llevaba ahí desde el principio de la fase, sin que nada lo delatara:
+
+- **El orden de los middlewares estaba al revés de lo que decía el comentario en el
+  código.** `Starlette.add_middleware()` inserta cada middleware nuevo *al principio* de
+  su lista interna, así que el *último* que se agrega termina siendo el *más externo* en
+  tiempo de ejecución — lo contrario de la lectura ingenua ("el primero que agrego es el
+  que ve todo primero"), que es la que el código tenía escrita en un comentario y la que
+  guio el orden original. El efecto concreto: el handler para excepciones no mapeadas
+  (`_handle_unexpected_error`) estaba registrado con `add_exception_handler(Exception, ...)`,
+  y Starlette manda esos handlers a `ServerErrorMiddleware` — la capa *más externa de
+  todas*, por fuera de `CORSMiddleware` y de `RequestContextMiddleware`. Una respuesta
+  generada ahí nunca llevaba `Access-Control-Allow-Origin` ni `X-Request-ID`, y su línea
+  canónica quedaba con `status_code: null` — comprobado pidiendo un endpoint que revienta
+  con `Origin` puesto: sin CORS, un navegador ve un error de red genérico en vez del 500
+  real, escondiendo el problema. Se arregló convirtiendo el catch-all en un middleware
+  propio (`UnhandledExceptionMiddleware`, en `app/api/errors.py`) posicionado
+  deliberadamente como el más interno de los agregados a mano, y reescribiendo el
+  comentario en `app/main.py` después de comprobar el orden real con un script, no de
+  memoria.
+- **Arreglar lo anterior rompió, de paso, `user_id` en la línea canónica.** Al mover
+  `RequestContextMiddleware` para que fuera el más externo (necesario para medir la
+  duración y el código de estado reales de *cualquier* respuesta, incluida una cortada
+  por rate limit o por tamaño de body), quedó por fuera de `SlowAPIMiddleware` — que
+  hereda de `BaseHTTPMiddleware`, la cual corre el resto de la petición en una *tarea de
+  asyncio aparte* para poder soportar respuestas en streaming. Un `ContextVar.set()`
+  hecho dentro de esa tarea (como `user_id_var.set(...)` en `get_current_user`) nunca se
+  propaga de vuelta a la tarea padre — comprobado con un script mínimo antes de aceptarlo
+  como explicación. `bind_canonical()` sí sobrevive esa frontera, porque muta un `dict`
+  ya compartido en vez de reasignar el contextvar — así que la solución fue que
+  `get_current_user`/`ws._authenticate` llamen también a `bind_canonical(user_id=...)`,
+  no solo a `user_id_var.set(...)`.
+- **`Limiter(default_limits=[...])` nunca disparaba, para ninguna ruta.** Verificando a
+  mano que un `429` de rate limit siguiera llevando headers de CORS (la misma pregunta
+  que el bug de arriba, pero para `SlowAPIMiddleware`), se probó con `/auth/login` — que
+  **sí** tiene un `@limiter.limit(...)` propio — y funcionó. Probar lo mismo contra una
+  ruta que dependiera del límite *global* (sin decorador propio) reveló que **nunca**
+  llegaba a bloquear nada, ni con el límite bajado a 3 peticiones por minuto para la
+  prueba. La causa: `SlowAPIMiddleware` decide si aplicar el límite recorriendo
+  `app.routes` para encontrar el handler de la petición actual
+  (`_find_route_handler`), y en esta versión de FastAPI (0.141) las rutas quedan
+  envueltas en un `_IncludedRouter` interno que esa función no sabe atravesar — devuelve
+  `None` siempre, y `slowapi` trata "no encontré el handler" como "esta ruta está
+  exenta". Se arregló abandonando `default_limits` (que quedó como código muerto que
+  nunca iba a funcionar) y aplicando `GLOBAL_RATE_LIMIT` con `@limiter.limit(...)`
+  explícito en cada ruta que lo necesitaba — el mismo mecanismo que ya usaban
+  `/auth/login` y compañía desde la Fase 4, que no pasa por `_find_route_handler` en
+  absoluto.
+
+Ninguno de los tres lo encontró un test antes de la revisión — los tests que ya existían
+pasaban porque comprobaban partes aisladas (que el catch-all no filtra el mensaje real;
+que el campo `user_id` aparece en *algún* momento; que `/auth/login`, que **sí** tiene un
+límite propio, corta en el quinto intento) sin ejercitar la combinación exacta que los
+rompía, o directamente sin haber pensado en probar una ruta que dependiera *solo* del
+límite global. Se reforzaron después:
+`test_excepcion_no_mapeada_...` ahora también comprueba los headers de CORS/`X-Request-ID`
+y el `status_code` de la línea canónica; `test_una_ruta_sin_limite_propio_ahora_si_limita`
+prueba 205 peticiones seguidas contra `/auth/me` y comprueba que las últimas 5 sí cortan.
+Se confirmó manualmente que los tres tests fallan si se revierte el arreglo
+correspondiente por separado.
+
 ## Calidad y testing
 
 ### Metodología
@@ -661,15 +821,19 @@ razonar el diseño encontró antes de que llegaran a ningún sitio importante:
 | 5 | Al reclamar una fila `idempotency_keys` abandonada, un `session.begin()` chocaba contra la transacción que SQLAlchemy ya había auto-iniciado con el `SELECT` anterior — habría sido un 500 permanente la primera vez que un proceso muriera a medio camino | Un test que simula esa fila abandonada a mano y comprueba que el reclamo de verdad ejecuta el negocio |
 | 6 | El test de "apostar publica eventos reales" asumía un conteo fijo de eventos (4) y de tipos de `wallet.transaction` (siempre `deposit` + `bet_stake`) — pero el giro es aleatorio: si la apuesta *gana*, `place_bet` encola un evento extra (`bet_payout`), y el test fallaba de forma intermitente (~50%, justo la probabilidad de un giro a rojo) sin que nada estuviera roto en el código de producción | Corriendo el test repetidas veces y notando que fallaba solo a veces, nunca de forma reproducible al primer intento — hasta instrumentar el outbox real y ver 5 filas donde se esperaban 4 |
 | 7 | `/ws` devolvía `404` contra el contenedor Docker real, aunque toda la suite (172 tests con `httpx-ws` + `ASGITransport` en proceso) pasaba en verde: `uvicorn` sin el extra `[standard]` no trae ningún backend de WebSocket instalado, así que el proceso arranca y `/health`/`/ready` responden bien, pero cualquier upgrade a WS cae en un 404 silencioso | Probando manualmente contra `docker compose up` después de que toda la suite automatizada — que corre en proceso, sin un servidor ASGI real de por medio — ya estaba en verde |
+| 8 | Todo el logging de la aplicación quedaba silenciosamente descartado durante la suite de integración entera — sin ningún error, simplemente nunca aparecía. `alembic/env.py` llamaba a `fileConfig()` con su default (`disable_existing_loggers=True`), y la fixture de sesión corre las migraciones *en el mismo proceso* que pytest, después de que ya se importó (y creó los loggers de) toda la app | Escribiendo el test de la línea canónica de esta fase: el logger `"canonical"` no recibía nada pese a tener un handler enganchado correctamente |
+| 9 | El catch-all de excepciones no mapeadas estaba registrado como exception handler (`add_exception_handler(Exception, ...)`), pero Starlette manda esos handlers a `ServerErrorMiddleware` — la capa *más externa de todas*, por fuera de CORS y de `RequestContextMiddleware`. La respuesta a un 500 real nunca llevaba `Access-Control-Allow-Origin` ni `X-Request-ID`, y su línea canónica quedaba con `status_code: null` | `/security-review`, que de paso señaló que el orden de los middlewares en `app/main.py` era el contrario de lo que decía el propio comentario del código |
+| 10 | Arreglar el bug anterior (mover `RequestContextMiddleware` para que fuera el middleware más externo) rompió `user_id` en la línea canónica: quedó por fuera de `SlowAPIMiddleware`, que hereda de `BaseHTTPMiddleware` y corre el resto de la petición en una tarea de `asyncio` aparte — un `ContextVar.set()` ahí adentro (`user_id_var.set(...)`) nunca se propaga de vuelta a la tarea que arma la línea canónica | Un script mínimo reproduciendo el aislamiento de `contextvars` a través de `BaseHTTPMiddleware`, después de notar que el test de la línea canónica seguía en verde pero por una razón distinta a la esperada |
+| 11 | `Limiter(default_limits=[...])` no aplicaba ningún límite a ninguna ruta, nunca: `SlowAPIMiddleware` recorre `app.routes` para encontrar el handler de cada petición, y en esta versión de FastAPI (0.141) las rutas quedan envueltas en un `_IncludedRouter` interno que esa búsqueda no atraviesa — devuelve `None` siempre, y `slowapi` trata "no encontré el handler" como "ruta exenta", sin ningún error que lo delate | Verificando a mano que un `429` llevara headers de CORS (la misma pregunta que el bug 9, para `SlowAPIMiddleware`): funcionó contra `/auth/login` (que sí tiene límite propio) pero nunca contra una ruta que dependiera solo del límite global, ni bajando el límite a 3 peticiones/minuto para forzarlo |
 
 Ninguno lo encontró una revisión manual — todos salieron de escribir el siguiente
-test, la siguiente fase, o de probar contra el contenedor real, y darse cuenta de que
-algo no cuadraba.
+test, la siguiente fase, de probar contra el contenedor real, o de una revisión
+automatizada de código/seguridad, y darse cuenta de que algo no cuadraba.
 
 ### Cobertura
 
 ```
-TOTAL   1463 stmts   10 miss   164 branch   12 partial   99% cover
+TOTAL   1670 stmts   11 miss   206 branch   13 partial   99% cover
 ```
 
 Sin umbral mínimo en CI todavía (`pytest-cov` está configurado; el `--cov-fail-under`
@@ -683,12 +847,14 @@ se decide en la Fase 9). Los huecos que quedan están identificados, no son desc
 | `app/services/idempotency.py` | Dos micro-carreras dentro de la propia carrera (dos reclamos simultáneos de la misma fila abandonada; el fallback final tras un segundo choque) | Exigiría inyectar temporización falsa para forzar un instante exacto; el mecanismo principal sí está probado bajo concurrencia real |
 | `app/api/v1/roulette.py` | `DataIntegrityError` si un `Round` quedara sin `outcome` | Mismo patrón que ya se prueba seis veces para wallet/seed pair; se dejó sin un séptimo test casi idéntico por rendimiento decreciente, no por no haberlo pensado |
 | `app/ws/broadcaster.py` | La rama de `QueueEmpty` dentro de `publish()` cuando una queue llena se vacía justo entre el `full()` y el `get_nowait()` | Es una ventana de carrera dentro de un solo hilo de evento (no debería poder ocurrir en la práctica); el camino principal, descartar el mensaje más viejo, sí está probado |
+| `app/api/errors.py` | La rama de `UnhandledExceptionMiddleware` donde la excepción llega después de que la respuesta ya empezó a mandarse (`response_started`) | Requeriría un endpoint que haga streaming parcial y reviente a mitad de camino; el camino real (excepción antes de cualquier byte de respuesta) sí está probado |
 
-El relay del outbox (`app/events/relay.py`) y el endpoint `/ws` llegaron a 100%, pero
-no gracias a los tests que dependen de infraestructura real (Redpanda, el contenedor
-Docker) — ver las notas correspondientes arriba sobre qué caminos de fallo necesitaron
-un doble de prueba aparte, y qué hueco (el de `uvicorn` sin backend de WS) solo la
-verificación manual contra el contenedor real terminó encontrando.
+El relay del outbox (`app/events/relay.py`), el endpoint `/ws` y `app/ws/rate_limit.py`
+llegaron a 100%, pero no gracias a los tests que dependen de infraestructura real
+(Redpanda, el contenedor Docker) — ver las notas correspondientes arriba sobre qué
+caminos de fallo necesitaron un doble de prueba aparte, y qué huecos (el de `uvicorn`
+sin backend de WS, el del orden de middlewares) solo la verificación manual contra el
+contenedor real o una revisión de seguridad terminaron encontrando.
 
 ## Estado
 
@@ -698,4 +864,10 @@ uso de apostar), Fase 6 (Kafka de verdad — productor, relay del outbox con bac
 exponencial y limpieza periódica, verificado con Redpanda real incluyendo el contenedor
 cayendo a mitad de una tanda de apuestas), Fase 7 (WebSocket — `/ws` autenticado,
 heartbeat, límite de conexiones, cierre ordenado, notificaciones desacopladas de Kafka
-a propósito). Siguiente: Fase 8 — endurecimiento y observabilidad.
+a propósito), Fase 8 (endurecimiento y observabilidad — logging JSON con líneas
+canónicas y correlación por `request_id`/`user_id`, manejador global de excepciones,
+CORS restringido, rate limiting global, límite de tamaño de body, `/metrics`; cerrada
+con `/code-review` y `/security-review`, que entre los dos y una verificación manual
+propia destaparon tres bugs reales — dos de orden de middlewares y uno en el que el
+rate limiting global de `slowapi` nunca disparaba — antes de darla por terminada).
+Siguiente: Fase 9 — CI.
