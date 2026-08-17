@@ -17,7 +17,7 @@ contrato de eventos y el borrador de API hacia `theclub-web`/`theclub-data` est�
 ```bash
 uv sync                 # crea .venv con Python 3.14 y las dependencias
 cp .env.example .env    # opcional: en local todo tiene defaults
-make up                 # postgres + redpanda + console + api
+make up                 # postgres + redpanda + console + redis + api + observabilidad
 ```
 
 Comprobación rápida:
@@ -35,6 +35,10 @@ curl localhost:8010/ready    # {"status":"ready","checks":{"database":"ok"}}
 | Postgres | `localhost:5432` (`theclub` / `theclub`) | `POSTGRES_PORT` |
 | Kafka desde el host | `localhost:19092` | `KAFKA_PORT` |
 | Kafka dentro de compose | `redpanda:9092` | — |
+| Redis | `localhost:6389` | `REDIS_PORT` |
+| Grafana | http://localhost:3002 (sin login, entra directo) | `GRAFANA_PORT` |
+| Prometheus | http://localhost:9091 | `PROMETHEUS_PORT` |
+| Loki | http://localhost:3100 | `LOKI_PORT` |
 
 Los puertos publicados en el host se eligieron para no chocar con los 8000/8080 que
 suelen ocupar otros proyectos. Si alguno te estorba, cámbialo en tu `.env`.
@@ -85,8 +89,10 @@ make db-revision m="mensaje"  # autogenera una migración a partir de los modelo
   al usuario dueño del token en cuanto su apuesta o depósito comprometen. Token inválido, ausente
   o de un usuario suspendido → cierre `4401`; límite de conexiones o de intentos de conexión
   alcanzado → cierre `4429`.
-- `GET /metrics` — métricas en formato Prometheus. Sin autenticación a propósito (ver la sección
-  de endurecimiento) — se restringe a nivel de red en un despliegue real, no con un token.
+- `GET /metrics` — métricas en formato Prometheus, scrapeadas por el `prometheus` de
+  `docker-compose` y graficadas en el dashboard de Grafana provisionado (ver más abajo). Sin
+  autenticación a propósito (ver la sección de endurecimiento) — se restringe a nivel de red
+  en un despliegue real, no con un token.
 
 `/auth/register` y `/auth/login` están limitados a 5 peticiones/minuto por IP;
 `/auth/refresh` a 10/minuto; el resto de los endpoints HTTP, a 200/minuto por IP por defecto
@@ -677,9 +683,38 @@ Otras piezas de esta fase:
   solo en la app.
 - **`/metrics`** — contadores y un histograma de duración por petición HTTP (via el mismo
   `RequestContextMiddleware`), más el conteo de conexiones WS activas/totales y de rondas
-  jugadas (`app/infra/metrics.py`, con `prometheus_client`). Marcado "opcional" en el plan
-  y sin Prometheus/Grafana todavía en el `docker-compose` que lo consuma — se construyó
-  igual porque exponerlo bien es barato con la librería estándar.
+  jugadas (`app/infra/metrics.py`, con `prometheus_client`). Marcado "opcional" en el plan,
+  construido igual porque exponerlo bien es barato con la librería estándar — y desde el
+  stack de observabilidad de más abajo, ya tiene quién lo consuma.
+
+### Stack de observabilidad: Prometheus, Grafana, Loki
+
+Cuatro servicios nuevos en `docker-compose.yml`, todos con su configuración versionada en
+`observability/` — nada se da de alta a mano en ninguna UI:
+
+- **`prometheus`** (`observability/prometheus/prometheus.yml`) — scrapea `api:8000/metrics`
+  cada 15s. El nombre de servicio (`api`) solo resuelve dentro de la red de compose; este
+  archivo no sirve para apuntar Prometheus a la API desde fuera.
+- **`loki`** (`observability/loki/loki-config.yml`) — modo *single-binary*, almacenamiento en
+  disco local (`loki-data`): de sobra para dev, no para un despliegue multi-nodo real.
+- **`promtail`** (`observability/promtail/promtail-config.yml`) — descubre contenedores por el
+  socket de Docker (montado solo lectura) en vez de listarlos a mano, así que un contenedor
+  nuevo se recoge solo. Como `app/infra/logging.py` ya emite una línea JSON por evento, una
+  `pipeline_stage` de tipo `json` extrae `level` como *label* de Loki sin tocar la app para
+  nada — una línea que no sea JSON válido (de otro contenedor, o un traceback multilínea)
+  simplemente no gana esa etiqueta, no se descarta.
+- **`grafana`** (`observability/grafana/provisioning/`) — datasources (Prometheus y Loki, con
+  `uid` fijo para que el dashboard los referencie sin depender de un ID autogenerado) y un
+  dashboard (`observability/grafana/dashboards/theclub-api.json`) provisionados como archivo,
+  con anonymous access habilitado (`GF_AUTH_ANONYMOUS_ENABLED`) para entrar sin login en
+  local. El dashboard trae siete paneles ya conectados a las métricas reales de
+  `app/infra/metrics.py`: peticiones HTTP por ruta, tasa de errores 5xx, latencia p95 por
+  ruta, conexiones WS activas, conexiones WS aceptadas por segundo, rondas resueltas
+  (ganadas vs. perdidas) y un panel de logs en vivo contra Loki.
+
+`PROMETHEUS_PORT` (9091, no 9090) y `GRAFANA_PORT` (3002, no 3000/3001) tienen defaults fuera
+de lo habitual por el mismo motivo que `REDIS_PORT=6389`: no chocar con otro proyecto local
+que ya use el puerto estándar.
 
 Un bug real, encontrado escribiendo el test de la línea canónica, no por el propio
 código de esta fase: la fixture de sesión de los tests de integración corre
@@ -870,4 +905,13 @@ CORS restringido, rate limiting global, límite de tamaño de body, `/metrics`; 
 con `/code-review` y `/security-review`, que entre los dos y una verificación manual
 propia destaparon tres bugs reales — dos de orden de middlewares y uno en el que el
 rate limiting global de `slowapi` nunca disparaba — antes de darla por terminada).
+
+Sobre la Fase 8, sin ser una fase nueva del plan: rate limiting movido de memoria del
+proceso a Redis (tanto el de `slowapi` como el de `/ws`, que ahora comparten estado
+entre redeploys), rotación de `JWT_SECRET` sin invalidar sesiones activas
+(`JWT_PREVIOUS_SECRETS`), el recorrido de punta a punta de la sección de verificación
+del plan convertido en test (`tests/e2e/`), y el stack de observabilidad completo
+(Prometheus, Grafana con datasources y dashboard provisionados como código, Loki y
+Promtail) — ver la sección correspondiente más arriba.
+
 Siguiente: Fase 9 — CI.

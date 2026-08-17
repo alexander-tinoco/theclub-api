@@ -1,0 +1,14 @@
+# Le dice a Grafana dónde buscar los JSON de dashboards versionados en el
+# repo (ver ../../dashboards/) -- así el dashboard existe desde el primer
+# arranque, sin construirlo a mano en la UI.
+apiVersion: 1
+
+providers:
+  - name: theclub-api
+    orgId: 1
+    folder: ""
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    options:
+      path: /var/lib/grafana/dashboards

@@ -1,0 +1,12 @@
+# Scrapea /metrics de la API dentro de la red de docker-compose. El nombre
+# de servicio (`api`) resuelve solo ahí -- por eso este archivo no sirve
+# para apuntar Prometheus a la API desde fuera de compose.
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: theclub-api
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["api:8000"]

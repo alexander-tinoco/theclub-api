@@ -11,7 +11,7 @@ install: ## Crea el entorno con uv
 dev: ## Arranca la API en local con recarga automática
 	uv run uvicorn app.main:app --reload --port 8000
 
-up: ## Levanta postgres, redpanda, console y la api
+up: ## Levanta todo: postgres, redpanda, console, redis, api y el stack de observabilidad
 	docker compose up -d --build
 
 down: ## Para los servicios (conserva los datos)
