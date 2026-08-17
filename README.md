@@ -24,7 +24,7 @@ Comprobación rápida:
 
 ```bash
 curl localhost:8010/health   # {"status":"ok",...}
-curl localhost:8010/ready    # {"status":"ready","checks":{}}
+curl localhost:8010/ready    # {"status":"ready","checks":{"database":"ok"}}
 ```
 
 | Servicio | URL | Variable para cambiar el puerto |
@@ -54,13 +54,17 @@ make lint        # ruff (lint + formato)
 make typecheck   # mypy en modo estricto
 make check       # lo mismo que exige el CI
 make reset       # tira los servicios y BORRA los volúmenes
+
+make db-upgrade   # aplica las migraciones pendientes
+make db-downgrade # revierte la última migración
+make db-revision m="mensaje"  # autogenera una migración a partir de los modelos
 ```
 
 ## Endpoints
 
 - `GET /health` — *liveness*. No consulta ninguna dependencia; si responde, el proceso vive.
 - `GET /ready` — *readiness*. Ejecuta los checks registrados y devuelve `503` si alguno falla.
-  Hoy la lista está vacía: la Fase 3 registrará Postgres y la Fase 6, Kafka.
+  Desde la Fase 3 registra `database` (un `SELECT 1` contra Postgres); la Fase 6 añadirá `kafka`.
 
 ## Arquitectura
 
@@ -86,15 +90,26 @@ flowchart TB
         engine["roulette/engine.py<br/>spin · resolve_bets"]
     end
 
-    subgraph INFRA["app/infra — Fase 3+"]
-        db[("Postgres")]
+    subgraph PERSISTENCE["app/models + app/repositories + app/infra"]
+        models["models/*<br/>User · Wallet · LedgerEntry · SeedPair<br/>Round · Bet · IdempotencyKey · OutboxEvent"]
+        repos["repositories/*<br/>WalletRepository · LedgerRepository"]
+        db_infra["infra/db.py<br/>engine async · unit_of_work"]
+    end
+
+    subgraph KAFKA["Fase 6 — pendiente"]
         kafka[("Kafka / Redpanda")]
     end
 
+    postgres[("Postgres")]
+
     EVENTS --> DOMAIN
+    API --> PERSISTENCE
     API -. Fase 5 .-> DOMAIN
-    API -. Fase 3 .-> INFRA
-    EVENTS -. Fase 6 .-> INFRA
+    EVENTS -. Fase 6 .-> KAFKA
+
+    repos --> models
+    repos --> db_infra
+    db_infra --> postgres
 
     bets --> table
     bets --> money
@@ -215,6 +230,22 @@ sequenceDiagram
     J->>J: recalcula cada giro con el algoritmo publico
 ```
 
+### Persistencia
+
+- **Sin columna de bloqueo optimista en `wallets`.** El plan original la incluía, pero
+  `debit`/`credit` son una sola sentencia `UPDATE ... WHERE ... RETURNING` — sin lectura
+  previa, sin carrera que un `version` deba prevenir. El repositorio no expone (ni
+  expondrá) un `set_balance`, que es lo único que sí necesitaría uno.
+- **`status`/`kind` como `String` + `CHECK`, no `ENUM` nativo de Postgres** — añadir un
+  valor nuevo es una migración normal, no un `ALTER TYPE` con las restricciones
+  históricas de Postgres para tipos enumerados.
+- **Convención de nombres en `models/base.py`** para que `alembic revision --autogenerate`
+  reconozca constraints entre entornos en vez de generarles nombres aleatorios.
+- **Índice único parcial en `seed_pairs`** (`WHERE status = 'active'`): la base de datos
+  garantiza sola que un usuario nunca tenga dos semillas activas a la vez.
+- **Índice parcial en `outbox`** (`WHERE published_at IS NULL`): la consulta del relay
+  (Fase 6) sigue siendo barata aunque la tabla acumule millones de filas ya publicadas.
+
 ## Calidad y testing
 
 ### Metodología
@@ -240,24 +271,41 @@ módulo que prueban, que es whitebox testing aceptado pero no "clean" en sentido
 estricto; y `test_roulette_engine.py` reutiliza un generador de datos definido en
 `test_roulette_bets.py` en vez de vivir en un módulo de fixtures separado.
 
+Una trampa real que encontramos en la Fase 3, documentada para que no se repita: Python
+3.14 difiere la evaluación de anotaciones (PEP 649), así que `ruff --fix` propone quitar
+las comillas de forward-refs como `Mapped["Wallet"]`. Es **seguro** cuando las dos clases
+viven en el mismo archivo (`Round`/`Bet` en `round.py`) porque para cuando SQLAlchemy
+configura los mappers, el módulo ya terminó de cargar y el nombre existe. Es **un
+`NameError` en tiempo de configuración de mappers** cuando la clase referenciada solo se
+importa bajo `TYPE_CHECKING` en otro módulo (`User`/`Wallet` entre sí) — lo comprobamos
+con un script aislado antes de decidir qué líneas llevan `# noqa: UP037` a propósito.
+
+### Migraciones excluidas del lint
+
+`alembic/versions/` está fuera de `ruff` (`extend-exclude`) y fuera de `mypy` (no incluido
+en `files`). Alembic las genera con su propio estilo (`Union[...]`, comillas simples) y
+reescribirlas a mano cada vez que se regeneran no aporta nada — `alembic/env.py`, que sí
+escribimos a mano, sigue linteado normalmente.
+
 ### Cobertura
 
 ```
-TOTAL   346 stmts   9 miss   56 branch   4 partial   97% cover
+TOTAL   529 stmts   5 miss   58 branch   4 partial   98% cover
 ```
 
 Sin umbral mínimo en CI todavía (`pytest-cov` está configurado; el `--cov-fail-under`
-se decide en la Fase 9). Los huecos que sí existen están identificados, no son
-descuido:
+se decide en la Fase 9). Los dos huecos que quedan están identificados, no son
+descuido — el de `app/main.py` que había en la Fase 0 (el `lifespan` sin ejercitar
+porque `ASGITransport` no lo dispara) se cerró en esta fase con `asgi-lifespan`, tal
+como quedó prometido:
 
 | Dónde | Qué falta cubrir | Por qué |
 |---|---|---|
 | `app/domain/fairness.py` | La rama de rejection sampling que pide un HMAC extra | Probabilidad ~10⁻⁹ de que ocurra; forzarla exigiría mockear `hmac` para un caso de valor dudoso |
 | `app/api/health.py` | El timeout de un readiness check | Necesitaría un check que duerma de verdad; el camino de "check que falla" sí está cubierto |
-| `app/main.py` | El cuerpo del `lifespan` | `ASGITransport` no dispara el lifespan de FastAPI en los tests; se cierra en la Fase 3, cuando el lifespan abra el engine de Postgres y haga falta `asgi-lifespan` de todas formas |
 
 ## Estado
 
 Completadas: Fase 0 (fundación), Fase 1 (contratos de eventos), Fase 2 (dominio de
-fairness y ruleta). Siguiente: Fase 3 — persistencia (modelos SQLAlchemy, migración
-Alembic, invariante ledger↔balance).
+fairness y ruleta), Fase 3 (persistencia). Siguiente: Fase 4 — autenticación (JWT,
+argon2id, refresh tokens con rotación).

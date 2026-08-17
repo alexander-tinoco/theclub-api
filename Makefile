@@ -1,5 +1,6 @@
 .DEFAULT_GOAL := help
-.PHONY: help install dev up down reset logs ps test test-unit lint fmt typecheck check
+.PHONY: help install dev up down reset logs ps test test-unit lint fmt typecheck check \
+	db-upgrade db-downgrade db-revision
 
 help: ## Muestra esta ayuda
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
@@ -43,3 +44,12 @@ typecheck: ## Comprobación estática de tipos
 	uv run mypy
 
 check: lint typecheck test ## Todo lo que exige el CI
+
+db-upgrade: ## Aplica las migraciones pendientes
+	uv run alembic upgrade head
+
+db-downgrade: ## Revierte la última migración
+	uv run alembic downgrade -1
+
+db-revision: ## Autogenera una migración a partir de los modelos (uso: make db-revision m="mensaje")
+	uv run alembic revision --autogenerate -m "$(m)"

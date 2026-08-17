@@ -16,6 +16,8 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev --no-install-project
 
 COPY app ./app
+COPY alembic ./alembic
+COPY alembic.ini ./
 
 # ------------------------------------------------------------------ runtime
 FROM python:3.14-slim-bookworm AS runtime
@@ -31,6 +33,8 @@ WORKDIR /app
 
 COPY --from=builder --chown=theclub:theclub /app/.venv /app/.venv
 COPY --from=builder --chown=theclub:theclub /app/app /app/app
+COPY --from=builder --chown=theclub:theclub /app/alembic /app/alembic
+COPY --from=builder --chown=theclub:theclub /app/alembic.ini /app/alembic.ini
 
 USER theclub
 

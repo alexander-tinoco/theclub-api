@@ -8,6 +8,9 @@ dependencies = [
     "fastapi>=0.115",
     "uvicorn>=0.30",
     "pydantic-settings>=2.5",
+    "sqlalchemy[asyncio]>=2.0",
+    "psycopg[binary,pool]>=3.2",
+    "alembic>=1.13",
 ]
 
 [dependency-groups]
@@ -22,6 +25,7 @@ dev = [
     "jsonschema>=4.23",
     "types-jsonschema>=4.23",
     "hypothesis>=6.100",
+    "asgi-lifespan>=2.1",
 ]
 
 [tool.uv]
@@ -32,6 +36,10 @@ package = false
 [tool.ruff]
 line-length = 100
 src = ["app", "tests"]
+# Las migraciones las genera Alembic con su propio estilo (comillas simples,
+# typing.Union en vez de X | None, etc.) — no vale la pena reescribirlas a mano
+# cada vez que se regeneran.
+extend-exclude = ["alembic/versions"]
 
 [tool.ruff.lint]
 select = [
