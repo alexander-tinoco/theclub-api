@@ -123,8 +123,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         CORSMiddleware,
         allow_origins=settings.CORS_ORIGINS,
         allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
+        # Restringido a lo que la API realmente usa — nunca hubo un motivo
+        # real para el comodín, ninguna ruta acepta otros métodos/headers.
+        allow_methods=["GET", "POST"],
+        allow_headers=["Authorization", "Content-Type", "Idempotency-Key"],
     )
 
     # El último `add_middleware` queda más afuera en tiempo de ejecución

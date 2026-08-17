@@ -117,6 +117,18 @@ class Settings(BaseSettings):
             raise ValueError("JWT_SECRET debe tener al menos 32 caracteres fuera de local/test")
         return self
 
+    @model_validator(mode="after")
+    def _check_cors_wildcard_in_production(self) -> Self:
+        """`CORSMiddleware` va con `allow_credentials=True` — un origen
+        comodín junto con credenciales es justo la combinación que los
+        navegadores rechazan y que, si por lo que sea "funcionara", sería
+        un agujero real. Mejor que la app no arranque a que sea un CORS
+        roto (o abierto) descubierto en producción.
+        """
+        if self.is_production and "*" in self.CORS_ORIGINS:
+            raise ValueError("CORS_ORIGINS no puede ser '*' fuera de local/test")
+        return self
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:

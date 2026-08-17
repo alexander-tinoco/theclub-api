@@ -61,3 +61,14 @@ def test_el_secreto_no_se_filtra_al_serializar() -> None:
 
     assert "x" * 48 not in str(settings)
     assert "x" * 48 not in repr(settings)
+
+
+def test_prod_rechaza_cors_comodin() -> None:
+    with pytest.raises(ValidationError, match="CORS_ORIGINS"):
+        Settings(APP_ENV="prod", JWT_SECRET="x" * 48, CORS_ORIGINS="*")
+
+
+def test_local_acepta_cors_comodin() -> None:
+    settings = Settings(APP_ENV="local", CORS_ORIGINS="*")
+
+    assert settings.CORS_ORIGINS == ["*"]
