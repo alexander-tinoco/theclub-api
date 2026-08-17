@@ -27,6 +27,7 @@ from app.events.relay import relay_loop
 from app.infra.db import create_engine, create_session_factory
 from app.infra.kafka import check_kafka, create_producer
 from app.infra.logging import configure_logging
+from app.infra.redis import check_redis, create_redis_client
 from app.ws.broadcaster import InMemoryBroadcaster
 from app.ws.connections import ConnectionRegistry
 from app.ws.rate_limit import WsConnectRateLimiter
@@ -77,6 +78,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             await task
     await producer.stop()
 
+    await app.state.redis.aclose()
     await app.state.db_engine.dispose()
     logger.info("Apagando %s", settings.APP_NAME)
 
@@ -106,9 +108,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     # Igual que readiness/engine: puros, sin IO, así que viven aquí y no en
     # el lifespan — los tests que no lo arrancan también los necesitan.
+    redis_client = create_redis_client(settings)
+    app.state.redis = redis_client
+    app.state.readiness.register("redis", lambda: check_redis(redis_client))
+
     app.state.ws_broadcaster = InMemoryBroadcaster()
     app.state.ws_connections = ConnectionRegistry(max_connections=settings.WS_MAX_CONNECTIONS)
     app.state.ws_connect_rate_limiter = WsConnectRateLimiter(
+        redis_client,
         max_attempts=settings.WS_CONNECT_RATE_LIMIT_ATTEMPTS,
         window_seconds=settings.WS_CONNECT_RATE_LIMIT_WINDOW_S,
     )

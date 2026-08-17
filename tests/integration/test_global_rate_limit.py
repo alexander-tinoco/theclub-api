@@ -21,16 +21,10 @@ import pytest
 from asgi_lifespan import LifespanManager
 from httpx import ASGITransport, AsyncClient
 
-from app.api.rate_limit import limiter
 from app.config import Settings
 from app.main import create_app
 
 pytestmark = pytest.mark.integration
-
-
-@pytest.fixture(autouse=True)
-def _reset_rate_limiter() -> None:
-    limiter.reset()
 
 
 async def test_una_ruta_sin_limite_propio_ahora_si_limita(

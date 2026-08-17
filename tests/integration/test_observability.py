@@ -20,7 +20,6 @@ from httpx import ASGITransport, AsyncClient
 from httpx_ws import WebSocketDisconnect, aconnect_ws
 from httpx_ws.transport import ASGIWebSocketTransport
 
-from app.api.rate_limit import limiter
 from app.config import Settings
 from app.main import create_app
 
@@ -34,11 +33,6 @@ class _CollectingHandler(logging.Handler):
 
     def emit(self, record: logging.LogRecord) -> None:
         self.records.append(record)
-
-
-@pytest.fixture(autouse=True)
-def _reset_rate_limiter() -> None:
-    limiter.reset()
 
 
 async def _register(client: AsyncClient) -> str:

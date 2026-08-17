@@ -27,5 +27,5 @@ async def test_ready_reporta_database_ok_con_postgres_real(
     assert response.status_code == 200
     assert response.json() == {
         "status": "ready",
-        "checks": {"database": "ok", "kafka": "ok"},
+        "checks": {"database": "ok", "redis": "ok", "kafka": "ok"},
     }

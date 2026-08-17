@@ -52,6 +52,12 @@ class Settings(BaseSettings):
     DATABASE_URL: str = "postgresql+psycopg://theclub:theclub@localhost:5432/theclub"
     DB_POOL_SIZE: int = Field(default=5, ge=1)
 
+    # --- Redis (Fase 8) -------------------------------------------------------
+    # Estado del rate limiting (global y de /ws): en memoria del proceso se
+    # pierde en cada redeploy — un atacante que sincronizara sus intentos con
+    # uno lo esquivaría. Con Redis, el estado sobrevive al proceso que lo usa.
+    REDIS_URL: str = "redis://localhost:6389/0"
+
     # --- Kafka / Redpanda (Fase 6) ------------------------------------------
     # Estos cinco campos son los que permiten pasar de Redpanda local a
     # Confluent Cloud cambiando solo el .env, sin tocar código.

@@ -1,47 +1,40 @@
-"""Límite de intentos de conexión a `/ws`, por IP.
+"""Límite de intentos de conexión a `/ws`, por IP, respaldado en Redis.
 
 `slowapi`/`SlowAPIMiddleware` no sirve aquí: hereda de `BaseHTTPMiddleware`,
 que Starlette salta por completo para conexiones WebSocket — así que el
 rate limiting "global" de la Fase 8 no llega a `/ws` sin este mecanismo
-aparte. Es deliberadamente más simple que `slowapi` (una ventana fija, no
-deslizante): el objetivo es frenar un bucle de reconexión, no ofrecer
-precisión de ventana — para eso ya existe `slowapi` en el resto de la API.
+aparte. Redis (no un dict en memoria) para que el conteo sobreviva a un
+redeploy del proceso — igual que el resto del rate limiting desde que se
+movió a Redis.
+
+Ventana fija, no deslizante, a propósito: el objetivo es frenar un bucle de
+reconexión, no ofrecer precisión de ventana — para eso ya está `slowapi`
+(también sobre Redis) en el resto de la API. Una ventana fija es una sola
+operación atómica en Redis (`INCR` + `EXPIRE` la primera vez), sin
+necesidad de un sorted set ni de podar entradas viejas a mano.
 """
 
+import math
 import time
-from collections import OrderedDict
 
-#: Cuántas IPs distintas se recuerdan como máximo. Sin este tope, una IP que
-#: se conecta una sola vez y nunca vuelve deja su entrada para siempre — con
-#: suficientes IPs distintas a lo largo de la vida del proceso (bots,
-#: escáneres, NAT/IPs dinámicas), el diccionario crece sin límite. Al
-#: llegar al tope se descarta la IP con la que hace más tiempo no se
-#: interactúa (para eso `OrderedDict` + `move_to_end` en cada acceso).
-MAX_TRACKED_IPS = 10_000
+from redis.asyncio import Redis
 
 
 class WsConnectRateLimiter:
-    def __init__(self, *, max_attempts: int, window_seconds: float) -> None:
+    def __init__(self, redis: Redis, *, max_attempts: int, window_seconds: float) -> None:
+        self._redis = redis
         self._max_attempts = max_attempts
         self._window_seconds = window_seconds
-        self._attempts: OrderedDict[str, list[float]] = OrderedDict()
 
-    def allow(self, key: str) -> bool:
-        now = time.monotonic()
-        cutoff = now - self._window_seconds
-        attempts = [t for t in self._attempts.get(key, []) if t > cutoff]
+    async def allow(self, key: str) -> bool:
+        window_bucket = math.floor(time.time() / self._window_seconds)
+        redis_key = f"ws-connect-rl:{key}:{window_bucket}"
 
-        allowed = len(attempts) < self._max_attempts
-        if allowed:
-            attempts.append(now)
+        attempts = await self._redis.incr(redis_key)
+        if attempts == 1:
+            # Solo la primera petición de la ventana pone el TTL — las
+            # siguientes reutilizan el mismo `EXPIRE` ya puesto, así la
+            # clave desaparece sola sin que nada tenga que limpiarla.
+            await self._redis.expire(redis_key, math.ceil(self._window_seconds))
 
-        if attempts:
-            self._attempts[key] = attempts
-            self._attempts.move_to_end(key)
-        else:
-            self._attempts.pop(key, None)
-
-        while len(self._attempts) > MAX_TRACKED_IPS:
-            self._attempts.popitem(last=False)
-
-        return allowed
+        return attempts <= self._max_attempts

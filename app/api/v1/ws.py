@@ -108,7 +108,7 @@ async def ws_endpoint(websocket: WebSocket) -> None:
     # Antes que nada, ni siquiera decodificar el token: `slowapi` no cubre
     # este endpoint (ver el docstring de `ws/rate_limit.py`), así que un
     # bucle de reconexión con un token roto no debe ni llegar a tocar la DB.
-    if not connect_rate_limiter.allow(client_ip):
+    if not await connect_rate_limiter.allow(client_ip):
         await websocket.close(code=CLOSE_TOO_MANY_CONNECTIONS)
         return
 

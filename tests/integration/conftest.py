@@ -10,10 +10,12 @@ from collections.abc import AsyncIterator
 from pathlib import Path
 
 import pytest
+import redis
 from alembic import command
 from alembic.config import Config
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
+from app.api.rate_limit import limiter
 from app.config import Settings
 from app.infra.db import create_engine as create_app_engine
 from app.infra.db import create_session_factory
@@ -64,3 +66,22 @@ async def _clean_tables(engine: AsyncEngine) -> AsyncIterator[None]:
     async with engine.begin() as conn:
         for table in reversed(Base.metadata.sorted_tables):
             await conn.execute(table.delete())
+
+
+@pytest.fixture(autouse=True)
+def _reset_rate_limiters(integration_settings: Settings) -> None:
+    """Ambos limitadores viven en el mismo Redis, entre procesos y entre
+    tests: sin esto, un test que agota su cupo deja el contador cargado
+    para el siguiente que reutilice la misma IP/clave dentro de la misma
+    ventana real de tiempo.
+
+    `limiter.reset()` (slowapi) solo borra las claves bajo su propio
+    prefijo — el `WsConnectRateLimiter` de `/ws` vive bajo el suyo
+    (`ws-connect-rl:`) y necesita su propia limpieza aparte.
+    """
+    limiter.reset()
+    client = redis.Redis.from_url(integration_settings.REDIS_URL)
+    keys = client.keys("ws-connect-rl:*")
+    if keys:
+        client.delete(*keys)
+    client.close()

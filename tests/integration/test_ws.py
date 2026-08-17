@@ -18,18 +18,12 @@ from httpx_ws.transport import ASGIWebSocketTransport
 from sqlalchemy import update
 from starlette.datastructures import Address
 
-from app.api.rate_limit import limiter
 from app.api.v1.ws import ws_endpoint
 from app.config import Settings
 from app.main import create_app
 from app.models.user import User
 
 pytestmark = pytest.mark.integration
-
-
-@pytest.fixture(autouse=True)
-def _reset_rate_limiter() -> None:
-    limiter.reset()
 
 
 async def _register(client: AsyncClient) -> tuple[str, str]:
