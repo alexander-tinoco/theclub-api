@@ -15,8 +15,17 @@ config = context.config
 
 # Interpret the config file for Python logging.
 # This line sets up loggers basically.
+#
+# `disable_existing_loggers=False`: el default de `fileConfig` (`True`)
+# desactiva cualquier logger ya creado que no esté listado en `alembic.ini`
+# — inofensivo cuando Alembic corre como proceso CLI aparte (como en
+# producción, vía `make`), pero los tests de integración migran la base
+# *en el mismo proceso* (`command.upgrade()` en `conftest.py`), después de
+# que pytest ya importó `app/` y creó todos sus loggers de módulo. Sin este
+# flag, esos loggers quedaban silenciosamente desactivados durante toda la
+# suite — se descubrió escribiendo el test de la línea canónica (Fase 8).
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 # La URL real viene de Settings (.env), no de alembic.ini — así no hay dos
 # sitios donde configurar la conexión a la base de datos.
