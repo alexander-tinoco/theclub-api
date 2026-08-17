@@ -65,6 +65,13 @@ make db-revision m="mensaje"  # autogenera una migración a partir de los modelo
 - `GET /health` — *liveness*. No consulta ninguna dependencia; si responde, el proceso vive.
 - `GET /ready` — *readiness*. Ejecuta los checks registrados y devuelve `503` si alguno falla.
   Desde la Fase 3 registra `database` (un `SELECT 1` contra Postgres); la Fase 6 añadirá `kafka`.
+- `POST /api/v1/auth/register` — email + password → crea `User` + `Wallet` en cero, devuelve tokens.
+- `POST /api/v1/auth/login` — email + password → tokens.
+- `POST /api/v1/auth/refresh` — rota el refresh token (ver más abajo).
+- `GET /api/v1/auth/me` — requiere `Authorization: Bearer <access_token>`.
+
+`/auth/register` y `/auth/login` están limitados a 5 peticiones/minuto por IP;
+`/auth/refresh` a 10/minuto.
 
 ## Arquitectura
 
@@ -76,6 +83,11 @@ depende de él, nunca al revés:
 flowchart TB
     subgraph API["app/api — HTTP"]
         health["health.py<br/>/health · /ready"]
+        authapi["v1/auth.py<br/>/auth/register · /login · /refresh · /me"]
+    end
+
+    subgraph SERVICES["app/services — casos de uso"]
+        authsvc["auth.py<br/>register_user · login · refresh_access_token"]
     end
 
     subgraph EVENTS["app/events — contratos hacia Kafka"]
@@ -91,9 +103,10 @@ flowchart TB
     end
 
     subgraph PERSISTENCE["app/models + app/repositories + app/infra"]
-        models["models/*<br/>User · Wallet · LedgerEntry · SeedPair<br/>Round · Bet · IdempotencyKey · OutboxEvent"]
-        repos["repositories/*<br/>WalletRepository · LedgerRepository"]
+        models["models/*<br/>User · Wallet · LedgerEntry · SeedPair<br/>Round · Bet · IdempotencyKey · OutboxEvent · RefreshToken"]
+        repos["repositories/*<br/>Wallet · Ledger · User · RefreshToken"]
         db_infra["infra/db.py<br/>engine async · unit_of_work"]
+        security["infra/security.py<br/>argon2id · JWT"]
     end
 
     subgraph KAFKA["Fase 6 — pendiente"]
@@ -103,7 +116,10 @@ flowchart TB
     postgres[("Postgres")]
 
     EVENTS --> DOMAIN
-    API --> PERSISTENCE
+    authapi --> authsvc
+    authsvc --> repos
+    authsvc --> security
+    health --> db_infra
     API -. Fase 5 .-> DOMAIN
     EVENTS -. Fase 6 .-> KAFKA
 
@@ -246,6 +262,41 @@ sequenceDiagram
 - **Índice parcial en `outbox`** (`WHERE published_at IS NULL`): la consulta del relay
   (Fase 6) sigue siendo barata aunque la tabla acumule millones de filas ya publicadas.
 
+### Autenticación
+
+- **El refresh token es un string opaco (`secrets.token_urlsafe`), no un JWT.** Como de
+  todas formas hay que consultar la base en cada refresh para saber si está revocado, un
+  JWT no aporta nada — y sí puede filtrar metadata en su payload. Solo se guarda su hash
+  SHA-256 (no argon2id: eso es caro a propósito para resistir fuerza bruta sobre secretos
+  de baja entropía como una contraseña; un token aleatorio de 256 bits no la necesita).
+- **Mismo error para "el email no existe" y "la contraseña es incorrecta"** en login —
+  distinguirlos permitiría usar el endpoint para averiguar qué emails están registrados.
+- **`get_current_user` recarga el usuario desde la base en cada petición** en vez de
+  confiar solo en el `sub` del JWT — así una cuenta suspendida deja de poder usar su
+  access token antes de que caduque, no solo en el siguiente login.
+
+```mermaid
+sequenceDiagram
+    participant C as Cliente
+    participant A as /auth/refresh
+
+    Note over C,A: Login inicial: familia F, token T0
+
+    C->>A: refresh(T0)
+    A->>A: T0 no revocado, no caducado
+    A->>A: revoca T0, emite T1 (misma familia F)
+    A-->>C: access_token nuevo + T1
+
+    Note over C: T0 robado por un atacante, en algún punto
+
+    C->>A: refresh(T0) -- reuso: T0 ya estaba revocado
+    A->>A: revoca TODA la familia F, incluido T1
+    A-->>C: 401 sesión revocada
+
+    C->>A: refresh(T1) -- el legítimo, pero ya revocado arriba
+    A-->>C: 401 -- la sesión completa quedó cerrada
+```
+
 ## Calidad y testing
 
 ### Metodología
@@ -287,17 +338,29 @@ en `files`). Alembic las genera con su propio estilo (`Union[...]`, comillas sim
 reescribirlas a mano cada vez que se regeneran no aporta nada — `alembic/env.py`, que sí
 escribimos a mano, sigue linteado normalmente.
 
+### Bugs reales encontrados durante el desarrollo
+
+No es una lista de virtudes — son tres errores que el propio proceso de escribir tests y
+razonar el diseño encontró antes de que llegaran a ningún sitio importante:
+
+| Fase | Qué estaba mal | Cómo se encontró |
+|---|---|---|
+| 1 | `payout_minor` no devolvía el stake apostado — un 35:1 pagaba 34x en vez de 35x | Al diseñar la Fase 2 y derivar la fórmula desde cero |
+| 3 | Las columnas de fecha eran `TIMESTAMP` sin zona horaria, contra lo que el propio plan decía ("todos los timestamps en TIMESTAMPTZ UTC") | Al necesitar comparar `datetime.now(UTC)` con `expires_at` en la Fase 4 |
+| 4 | Revocar la familia entera de refresh tokens al detectar un reuso no sobrevivía: el rollback automático de la transacción deshacía la revocación justo antes de guardarla | Un test de integración que reintentaba el token ya rotado tras el "robo" |
+
+Ninguno lo encontró una revisión manual — los tres salieron de escribir el siguiente test
+o la siguiente fase y darse cuenta de que algo no cuadraba.
+
 ### Cobertura
 
 ```
-TOTAL   529 stmts   5 miss   58 branch   4 partial   98% cover
+TOTAL   771 stmts   5 miss   80 branch   4 partial   99% cover
 ```
 
 Sin umbral mínimo en CI todavía (`pytest-cov` está configurado; el `--cov-fail-under`
 se decide en la Fase 9). Los dos huecos que quedan están identificados, no son
-descuido — el de `app/main.py` que había en la Fase 0 (el `lifespan` sin ejercitar
-porque `ASGITransport` no lo dispara) se cerró en esta fase con `asgi-lifespan`, tal
-como quedó prometido:
+descuido:
 
 | Dónde | Qué falta cubrir | Por qué |
 |---|---|---|
@@ -307,5 +370,5 @@ como quedó prometido:
 ## Estado
 
 Completadas: Fase 0 (fundación), Fase 1 (contratos de eventos), Fase 2 (dominio de
-fairness y ruleta), Fase 3 (persistencia). Siguiente: Fase 4 — autenticación (JWT,
-argon2id, refresh tokens con rotación).
+fairness y ruleta), Fase 3 (persistencia), Fase 4 (autenticación). Siguiente: Fase 5 —
+el caso de uso de apostar (idempotencia, débito/crédito atómico, outbox).

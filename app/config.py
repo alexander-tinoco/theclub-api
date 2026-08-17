@@ -13,7 +13,9 @@ from pydantic import BeforeValidator, Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Valor centinela: arrancar en staging/prod con este secreto es un error fatal.
-PLACEHOLDER_SECRET = "cambiame-en-produccion"  # noqa: S105
+# >= 32 bytes a propósito: por debajo de eso, PyJWT emite InsecureKeyLengthWarning
+# en cada HS256 firmado, incluso en local/test.
+PLACEHOLDER_SECRET = "cambiame-en-produccion-000000000"  # noqa: S105
 
 Environment = Literal["local", "test", "staging", "prod"]
 LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
