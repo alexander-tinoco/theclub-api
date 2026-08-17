@@ -44,4 +44,10 @@ EXPOSE 8000
 HEALTHCHECK --interval=10s --timeout=3s --start-period=15s --retries=5 \
     CMD python -c "import urllib.request as u; u.urlopen('http://127.0.0.1:8000/health').read()"
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# --no-access-log: uvicorn.access loggea con su propio formato de texto,
+# fuera del logging JSON de la app (app/infra/logging.py) — la línea
+# canónica de cada petición (method, path, status_code, duration_ms,
+# request_id, user_id) ya cubre lo mismo y más, en el mismo formato que
+# el resto de los logs. En `make dev` se deja el access log de uvicorn tal
+# cual: en local, legible a ojo importa más que el formato consistente.
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--no-access-log"]
