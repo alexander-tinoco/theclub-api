@@ -11,6 +11,7 @@ from collections.abc import Awaitable, Callable
 from fastapi import FastAPI, Request, status
 from fastapi.responses import JSONResponse
 from starlette.responses import Response
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app.domain.roulette.bets import InvalidBetError
 from app.infra.security import InvalidTokenError, TokenExpiredError
@@ -63,6 +64,62 @@ async def _handle_data_integrity_error(request: Request, exc: Exception) -> Resp
     return JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, content={"detail": "error interno"}
     )
+
+
+async def _handle_unexpected_error(request: Request, exc: Exception) -> Response:
+    """Red de seguridad final: cualquier excepción que no esté en `_ERROR_MAP`
+    es, por definición, un bug de verdad — no algo que el cliente pudo
+    provocar a propósito. Se registra con el stack trace completo (nivel
+    ERROR) y la respuesta nunca incluye `str(exc)` ni nada de la excepción:
+    solo un detail genérico, para no filtrar internals.
+    """
+    logger.error("Excepción no manejada en %s", request.url.path, exc_info=exc)
+    return JSONResponse(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, content={"detail": "error interno"}
+    )
+
+
+class UnhandledExceptionMiddleware:
+    """Atrapa `Exception` como middleware ASGI, no como
+    `app.add_exception_handler(Exception, ...)`.
+
+    Starlette envía los handlers registrados para la clave literal
+    `Exception` (o `500`) a `ServerErrorMiddleware` — la capa *más externa*
+    de todas, por fuera de `CORSMiddleware` y de `RequestContextMiddleware`.
+    Una respuesta generada ahí nunca lleva los headers de CORS ni
+    `X-Request-ID`, y la línea canónica de esa petición queda con
+    `status_code: null`, porque el `send` que la produce nunca pasa por el
+    `send_wrapper` de ninguno de los dos. Atrapar la excepción aquí, en la
+    capa *más interna* (pegada al router, añadida después de `CORSMiddleware`
+    en `create_app()`), hace que ambas capas sí vean la respuesta real.
+    """
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        response_started = False
+
+        async def send_wrapper(message: Message) -> None:
+            nonlocal response_started
+            if message["type"] == "http.response.start":
+                response_started = True
+            await send(message)
+
+        try:
+            await self.app(scope, receive, send_wrapper)
+        except Exception as exc:
+            if response_started:
+                # Ya se mandó algo — inyectar una respuesta nueva encima
+                # rompería el protocolo ASGI. No queda otra que relanzar,
+                # igual que hace Starlette en el mismo caso.
+                raise
+            response = await _handle_unexpected_error(Request(scope, receive), exc)
+            await response(scope, receive, send)
 
 
 def register_error_handlers(app: FastAPI) -> None:

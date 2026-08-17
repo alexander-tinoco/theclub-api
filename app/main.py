@@ -14,7 +14,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 from starlette.middleware.cors import CORSMiddleware
 
-from app.api.errors import register_error_handlers
+from app.api.errors import UnhandledExceptionMiddleware, register_error_handlers
 from app.api.health import ReadinessRegistry
 from app.api.health import router as health_router
 from app.api.middleware import MaxBodySizeMiddleware
@@ -118,6 +118,32 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # el Exception genérico que espera Starlette — desajuste de varianza
     # conocido entre las dos librerías, no un error real.
     app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)  # type: ignore[arg-type]
+
+    # Orden importa, y es contraintuitivo: `Starlette.add_middleware` inserta
+    # cada middleware nuevo al *principio* de su lista interna
+    # (`user_middleware.insert(0, ...)`), así que el *último* que se agrega
+    # aquí termina siendo el *más externo* en tiempo de ejecución (ve la
+    # petición primero, la respuesta al final) — lo comprobamos con un
+    # script antes de confiar en esto, porque la lectura ingenua ("el
+    # primero que agrego es el que ve todo primero") es al revés.
+    #
+    # De más interno a más externo:
+    #   UnhandledExceptionMiddleware — pegado al router; si algo revienta
+    #     sin estar mapeado, genera la respuesta *antes* de salir de CORS,
+    #     para que sí lleve sus headers (Starlette manda los handlers de
+    #     `Exception`/500 registrados vía `add_exception_handler` a
+    #     `ServerErrorMiddleware`, la capa más externa de todas — por fuera
+    #     de CORS y de RequestContext; de ahí que esto sea middleware, no
+    #     un exception handler más).
+    #   SlowAPIMiddleware, CORSMiddleware, MaxBodySizeMiddleware — cada uno
+    #     puede cortar la petición con su propia respuesta (429, CORS
+    #     inválido, 413).
+    #   RequestContextMiddleware — el más externo: mide la duración total
+    #     real y ve el código de estado final sin importar en qué capa se
+    #     generó la respuesta, así que su línea canónica y el header
+    #     `X-Request-ID` cubren *toda* petición, incluida una rechazada por
+    #     cualquiera de las capas de abajo.
+    app.add_middleware(UnhandledExceptionMiddleware)
     app.add_middleware(SlowAPIMiddleware)
 
     app.add_middleware(
@@ -131,12 +157,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
 
     app.add_middleware(MaxBodySizeMiddleware, max_body_bytes=settings.MAX_REQUEST_BODY_BYTES)
-
-    # El último `add_middleware` queda más afuera en tiempo de ejecución
-    # (`Starlette.add_middleware` inserta cada uno al *principio* de su
-    # lista interna) — así ve la duración total real y el código de estado
-    # final de cualquier petición, sin importar en qué capa se generó la
-    # respuesta.
     app.add_middleware(RequestContextMiddleware)
 
     register_error_handlers(app)
