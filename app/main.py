@@ -28,6 +28,7 @@ from app.infra.kafka import check_kafka, create_producer
 from app.infra.logging import configure_logging
 from app.ws.broadcaster import InMemoryBroadcaster
 from app.ws.connections import ConnectionRegistry
+from app.ws.rate_limit import WsConnectRateLimiter
 
 logger = logging.getLogger(__name__)
 
@@ -106,6 +107,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # el lifespan — los tests que no lo arrancan también los necesitan.
     app.state.ws_broadcaster = InMemoryBroadcaster()
     app.state.ws_connections = ConnectionRegistry(max_connections=settings.WS_MAX_CONNECTIONS)
+    app.state.ws_connect_rate_limiter = WsConnectRateLimiter(
+        max_attempts=settings.WS_CONNECT_RATE_LIMIT_ATTEMPTS,
+        window_seconds=settings.WS_CONNECT_RATE_LIMIT_WINDOW_S,
+    )
 
     app.state.limiter = limiter
     # slowapi tipa su handler específicamente para RateLimitExceeded, no para

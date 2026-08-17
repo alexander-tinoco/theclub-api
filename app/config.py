@@ -80,6 +80,8 @@ class Settings(BaseSettings):
     WS_MAX_CONNECTIONS: int = Field(default=1000, ge=1)
     WS_HEARTBEAT_INTERVAL_S: float = Field(default=20.0, gt=0)
     WS_HEARTBEAT_TIMEOUT_S: float = Field(default=45.0, gt=0)
+    WS_CONNECT_RATE_LIMIT_ATTEMPTS: int = Field(default=10, ge=1)
+    WS_CONNECT_RATE_LIMIT_WINDOW_S: float = Field(default=60.0, gt=0)
 
     @property
     def is_production(self) -> bool:

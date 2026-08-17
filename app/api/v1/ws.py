@@ -27,6 +27,7 @@ from app.infra.security import InvalidTokenError, TokenExpiredError, decode_acce
 from app.repositories.users import UserRepository
 from app.ws.broadcaster import Broadcaster
 from app.ws.connections import ConnectionRegistry
+from app.ws.rate_limit import WsConnectRateLimiter
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +36,9 @@ router = APIRouter(tags=["ws"])
 #: Códigos de cierre en el rango de aplicación (4000-4999, libre para uso
 #: propio según RFC 6455) — el cliente los distingue de un cierre normal.
 CLOSE_UNAUTHORIZED = 4401
+#: Cubre dos límites distintos (demasiadas conexiones activas, demasiados
+#: intentos de conexión en la ventana) — el cliente no necesita distinguir
+#: cuál de los dos disparó el cierre, en ambos casos la respuesta es esperar.
 CLOSE_TOO_MANY_CONNECTIONS = 4429
 
 
@@ -98,6 +102,15 @@ async def ws_endpoint(websocket: WebSocket) -> None:
     settings: Settings = websocket.app.state.settings
     broadcaster: Broadcaster = websocket.app.state.ws_broadcaster
     registry: ConnectionRegistry = websocket.app.state.ws_connections
+    connect_rate_limiter: WsConnectRateLimiter = websocket.app.state.ws_connect_rate_limiter
+
+    client_ip = websocket.client.host if websocket.client else "unknown"
+    # Antes que nada, ni siquiera decodificar el token: `slowapi` no cubre
+    # este endpoint (ver el docstring de `ws/rate_limit.py`), así que un
+    # bucle de reconexión con un token roto no debe ni llegar a tocar la DB.
+    if not connect_rate_limiter.allow(client_ip):
+        await websocket.close(code=CLOSE_TOO_MANY_CONNECTIONS)
+        return
 
     user_id = await _authenticate(websocket)
     if user_id is None:
