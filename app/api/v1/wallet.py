@@ -7,7 +7,7 @@ from uuid import UUID
 from fastapi import APIRouter, Header, Query, Request
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.api.deps import CurrentUserDep, SessionDep, SessionFactoryDep, SettingsDep
+from app.api.deps import BroadcasterDep, CurrentUserDep, SessionDep, SessionFactoryDep, SettingsDep
 from app.api.pagination import decode_cursor, encode_cursor
 from app.api.rate_limit import limiter
 from app.services import wallet as wallet_service
@@ -92,6 +92,7 @@ async def deposit(
     user: CurrentUserDep,
     settings: SettingsDep,
     session_factory: SessionFactoryDep,
+    broadcaster: BroadcasterDep,
     idempotency_key: Annotated[
         str, Header(alias="Idempotency-Key", min_length=1, max_length=IDEMPOTENCY_KEY_MAX_LENGTH)
     ],
@@ -109,7 +110,7 @@ async def deposit(
         )
         return result.to_dict()
 
-    return await run_idempotent(
+    result = await run_idempotent(
         session_factory,
         user_id=user.id,
         key=idempotency_key,
@@ -117,3 +118,5 @@ async def deposit(
         ttl_hours=settings.IDEMPOTENCY_KEY_TTL_HOURS,
         work=work,
     )
+    await broadcaster.publish(user.id, {"type": "balance.updated", **result})
+    return result

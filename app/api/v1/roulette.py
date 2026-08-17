@@ -7,7 +7,7 @@ from uuid import UUID
 from fastapi import APIRouter, Header, Query, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.api.deps import CurrentUserDep, SessionDep, SessionFactoryDep, SettingsDep
+from app.api.deps import BroadcasterDep, CurrentUserDep, SessionDep, SessionFactoryDep, SettingsDep
 from app.api.pagination import decode_cursor, encode_cursor
 from app.api.rate_limit import limiter
 from app.domain.roulette.bets import Selection
@@ -93,6 +93,7 @@ async def create_round(
     user: CurrentUserDep,
     settings: SettingsDep,
     session_factory: SessionFactoryDep,
+    broadcaster: BroadcasterDep,
     idempotency_key: Annotated[
         str, Header(alias="Idempotency-Key", min_length=1, max_length=IDEMPOTENCY_KEY_MAX_LENGTH)
     ],
@@ -116,7 +117,7 @@ async def create_round(
         )
         return result.to_dict()
 
-    return await run_idempotent(
+    result = await run_idempotent(
         session_factory,
         user_id=user.id,
         key=idempotency_key,
@@ -124,6 +125,12 @@ async def create_round(
         ttl_hours=settings.IDEMPOTENCY_KEY_TTL_HOURS,
         work=work,
     )
+    # Sale siempre que la petición terminó en éxito, incluso en un reintento
+    # idempotente que solo repite la respuesta cacheada — un WS duplicado con
+    # el mismo round_id es un redibujo inofensivo, no un doble cobro (eso lo
+    # impide `run_idempotent`, no esto).
+    await broadcaster.publish(user.id, {"type": "round.settled", **result})
+    return result
 
 
 class RoundHistoryItem(BaseModel):

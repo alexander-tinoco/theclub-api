@@ -24,6 +24,8 @@ from app.events.outbox_cleanup import purge_loop
 from app.events.relay import relay_loop
 from app.infra.db import create_engine, create_session_factory
 from app.infra.kafka import check_kafka, create_producer
+from app.ws.broadcaster import InMemoryBroadcaster
+from app.ws.connections import ConnectionRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +62,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     yield
 
+    # Avisar a los clientes WS antes de tirar el resto de la infraestructura:
+    # sus handlers no dependen de Postgres/Kafka en su propio cierre, pero
+    # "decirles que nos vamos" antes es el orden que tiene sentido igual.
+    await app.state.ws_connections.close_all()
+
     for task in (relay_task, purge_task):
         task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
@@ -94,6 +101,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.db_engine = engine
     app.state.db_session_factory = create_session_factory(engine)
     app.state.readiness.register("database", lambda: _check_database(engine))
+
+    # Igual que readiness/engine: puros, sin IO, así que viven aquí y no en
+    # el lifespan — los tests que no lo arrancan también los necesitan.
+    app.state.ws_broadcaster = InMemoryBroadcaster()
+    app.state.ws_connections = ConnectionRegistry(max_connections=settings.WS_MAX_CONNECTIONS)
 
     app.state.limiter = limiter
     # slowapi tipa su handler específicamente para RateLimitExceeded, no para

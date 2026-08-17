@@ -12,6 +12,7 @@ from app.infra.security import InvalidTokenError, decode_access_token
 from app.models.user import User
 from app.repositories.users import UserRepository
 from app.services.auth import UserSuspendedError
+from app.ws.broadcaster import Broadcaster
 
 
 def get_app_settings(request: Request) -> Settings:
@@ -76,3 +77,11 @@ async def get_current_user(request: Request, session: SessionDep, settings: Sett
 
 
 CurrentUserDep = Annotated[User, Depends(get_current_user)]
+
+
+def get_broadcaster(request: Request) -> Broadcaster:
+    broadcaster: Broadcaster = request.app.state.ws_broadcaster
+    return broadcaster
+
+
+BroadcasterDep = Annotated[Broadcaster, Depends(get_broadcaster)]

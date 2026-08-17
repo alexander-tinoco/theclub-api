@@ -81,6 +81,9 @@ make db-revision m="mensaje"  # autogenera una migración a partir de los modelo
 - `GET /api/v1/wallet/balance` — `{balance_minor, currency}`.
 - `GET /api/v1/wallet/transactions` — el ledger, paginado por cursor.
 - `POST /api/v1/wallet/deposit` — depósito simulado. `Idempotency-Key` obligatorio también.
+- `GET /api/v1/ws?token=<access_token>` — WebSocket. Empuja `round.settled` y `balance.updated`
+  al usuario dueño del token en cuanto su apuesta o depósito comprometen. Token inválido, ausente
+  o de un usuario suspendido → cierre `4401`; límite de conexiones alcanzado → cierre `4429`.
 
 `/auth/register` y `/auth/login` están limitados a 5 peticiones/minuto por IP;
 `/auth/refresh` a 10/minuto.
@@ -98,6 +101,12 @@ flowchart TB
         authapi["v1/auth.py<br/>/auth/*"]
         rouletteapi["v1/roulette.py<br/>/roulette/fairness/* · /roulette/rounds"]
         walletapi["v1/wallet.py<br/>/wallet/*"]
+        wsapi["v1/ws.py<br/>/ws"]
+    end
+
+    subgraph WS["app/ws — notificaciones en vivo"]
+        broadcaster["broadcaster.py<br/>Broadcaster · InMemoryBroadcaster"]
+        connections["connections.py<br/>ConnectionRegistry"]
     end
 
     subgraph SERVICES["app/services — casos de uso"]
@@ -142,6 +151,10 @@ flowchart TB
     rouletteapi --> roulettesvc
     walletapi --> idempotencysvc
     walletapi --> walletsvc
+    rouletteapi --> broadcaster
+    walletapi --> broadcaster
+    wsapi --> broadcaster
+    wsapi --> connections
     idempotencysvc --> repos
     roulettesvc --> engine
     roulettesvc --> repos
@@ -520,6 +533,80 @@ tiene — así que no es una prueba fiable de que Kafka acaba de caerse en el se
 exacto en que se apagó el contenedor, solo de que en algún momento reciente fue
 alcanzable.
 
+### WebSocket: notificaciones en vivo
+
+`/ws` es deliberadamente independiente del outbox/Kafka: `app/api/v1/roulette.py` y
+`app/api/v1/wallet.py` publican al `Broadcaster` justo después de que `run_idempotent`
+confirma el commit, no desde el relay. Si acoplara el WS al relay, un jugador dejaría
+de ver sus resultados en vivo cada vez que Kafka estuviera caído — exactamente el
+escenario que la Fase 6 diseñó para que el juego *siguiera funcionando* sin degradar la
+experiencia.
+
+```mermaid
+sequenceDiagram
+    participant C as Cliente WS
+    participant WS as /ws
+    participant B as InMemoryBroadcaster
+    participant API as POST /rounds
+
+    C->>WS: connect ?token=<jwt>
+    WS->>WS: decode_access_token + usuario activo
+    alt token inválido/expirado/suspendido
+        WS-->>C: close(4401)
+    else límite de conexiones alcanzado
+        WS-->>C: close(4429)
+    else OK
+        WS->>WS: accept()
+        WS->>B: subscribe(user_id)
+    end
+
+    Note over C,API: en paralelo, la misma sesión hace una apuesta
+    C->>API: POST /rounds (Idempotency-Key)
+    API->>API: run_idempotent → place_bet → commit
+    API->>B: publish(user_id, {"type":"round.settled", ...})
+    B-->>WS: el mensaje llega a la queue de esa conexión
+    WS-->>C: send_json(round.settled)
+```
+
+`Broadcaster` es un `Protocol`: `InMemoryBroadcaster` es la única implementación hoy (un
+`dict[user_id, set[Queue]]` en memoria del proceso), pero el DoD de esta fase pide
+justo esto — dejar el hueco para que una `RedisBroadcaster` (PUBLISH/SUBSCRIBE) lo
+reemplace sin tocar `ws.py` ni las rutas, el día que haga falta correr varias
+instancias (fuera de alcance ahora, según el plan original).
+
+Tres mecanismos más, todos en `app/api/v1/ws.py` y `app/ws/connections.py`:
+
+- **Heartbeat app-level**: `_sender` manda `{"type":"ping"}` cada `WS_HEARTBEAT_INTERVAL_S`
+  si no hay nada real que reenviar (se intercalan en el mismo bucle, no compiten);
+  `_receiver` espera cualquier frame del cliente (típicamente `{"type":"pong"}`) y, si no
+  llega ninguno en `WS_HEARTBEAT_TIMEOUT_S`, se asume una conexión zombie — un móvil que
+  se durmió sin cerrar el TCP, por ejemplo — y se cierra.
+- **Límite de conexiones**: `ConnectionRegistry` rechaza con `close(4429)` antes de
+  aceptar si ya se llegó a `WS_MAX_CONNECTIONS` — protege el proceso, no es por usuario.
+- **Cierre ordenado**: el mismo `ConnectionRegistry` manda un `close(1001)` a cada
+  conexión activa en el shutdown del `lifespan`, antes de tirar el resto de la
+  infraestructura — sin esto, `docker compose down` simplemente cortaría el TCP sin
+  avisar al cliente.
+
+Autenticación por `?token=<jwt>` en la query string, no por header: el navegador no deja
+mandar `Authorization` en el handshake de un WebSocket. Es un trade-off real, no un
+descuido — el token puede acabar en logs de acceso de un proxy intermedio si no se
+filtra explícitamente. Aceptable para este MVP; la alternativa (mandar el token como
+primer mensaje tras conectar) evita el problema a costa de un paso extra en el cliente
+y una ventana sin autenticar mientras se espera ese mensaje.
+
+Un bug real, encontrado tarde — no por los tests, sino al probar el contenedor de
+verdad: toda la suite (172 tests contando solo Fase 6, con `httpx-ws` + `ASGITransport`
+en proceso) pasaba en verde, pero `/ws` devolvía `404` contra el contenedor Docker real.
+La causa: `uvicorn` sin el extra `[standard]` no trae ningún backend de WebSocket
+(`websockets` ni `wsproto`) instalado — la app arranca perfecto, `/health` y `/ready`
+responden, pero cualquier intento de upgrade a WebSocket cae en un 404 silencioso,
+porque a nivel ASGI no hay nadie dispuesto a aceptar ese protocolo. Ningún test lo
+detectó porque todos corren en proceso, contra la app directamente, sin pasar por un
+servidor ASGI real — exactamente el hueco que tapa la verificación manual contra
+`docker compose up`. Se arregló añadiendo `websockets` como dependencia explícita de
+producción (no de test) en `pyproject.toml`.
+
 ## Calidad y testing
 
 ### Metodología
@@ -573,14 +660,16 @@ razonar el diseño encontró antes de que llegaran a ningún sitio importante:
 | 4 | Revocar la familia entera de refresh tokens al detectar un reuso no sobrevivía: el rollback automático de la transacción deshacía la revocación justo antes de guardarla | Un test de integración que reintentaba el token ya rotado tras el "robo" |
 | 5 | Al reclamar una fila `idempotency_keys` abandonada, un `session.begin()` chocaba contra la transacción que SQLAlchemy ya había auto-iniciado con el `SELECT` anterior — habría sido un 500 permanente la primera vez que un proceso muriera a medio camino | Un test que simula esa fila abandonada a mano y comprueba que el reclamo de verdad ejecuta el negocio |
 | 6 | El test de "apostar publica eventos reales" asumía un conteo fijo de eventos (4) y de tipos de `wallet.transaction` (siempre `deposit` + `bet_stake`) — pero el giro es aleatorio: si la apuesta *gana*, `place_bet` encola un evento extra (`bet_payout`), y el test fallaba de forma intermitente (~50%, justo la probabilidad de un giro a rojo) sin que nada estuviera roto en el código de producción | Corriendo el test repetidas veces y notando que fallaba solo a veces, nunca de forma reproducible al primer intento — hasta instrumentar el outbox real y ver 5 filas donde se esperaban 4 |
+| 7 | `/ws` devolvía `404` contra el contenedor Docker real, aunque toda la suite (172 tests con `httpx-ws` + `ASGITransport` en proceso) pasaba en verde: `uvicorn` sin el extra `[standard]` no trae ningún backend de WebSocket instalado, así que el proceso arranca y `/health`/`/ready` responden bien, pero cualquier upgrade a WS cae en un 404 silencioso | Probando manualmente contra `docker compose up` después de que toda la suite automatizada — que corre en proceso, sin un servidor ASGI real de por medio — ya estaba en verde |
 
 Ninguno lo encontró una revisión manual — todos salieron de escribir el siguiente
-test o la siguiente fase y darse cuenta de que algo no cuadraba.
+test, la siguiente fase, o de probar contra el contenedor real, y darse cuenta de que
+algo no cuadraba.
 
 ### Cobertura
 
 ```
-TOTAL   1328 stmts   10 miss   140 branch   8 partial   99% cover
+TOTAL   1463 stmts   10 miss   164 branch   12 partial   99% cover
 ```
 
 Sin umbral mínimo en CI todavía (`pytest-cov` está configurado; el `--cov-fail-under`
@@ -593,10 +682,13 @@ se decide en la Fase 9). Los huecos que quedan están identificados, no son desc
 | `app/infra/kafka.py` | La rama SASL de `create_producer` | No hay broker con SASL en dev/test; se ejercita construyendo `Settings` con esas credenciales en `test_config.py`, pero no el productor real |
 | `app/services/idempotency.py` | Dos micro-carreras dentro de la propia carrera (dos reclamos simultáneos de la misma fila abandonada; el fallback final tras un segundo choque) | Exigiría inyectar temporización falsa para forzar un instante exacto; el mecanismo principal sí está probado bajo concurrencia real |
 | `app/api/v1/roulette.py` | `DataIntegrityError` si un `Round` quedara sin `outcome` | Mismo patrón que ya se prueba seis veces para wallet/seed pair; se dejó sin un séptimo test casi idéntico por rendimiento decreciente, no por no haberlo pensado |
+| `app/ws/broadcaster.py` | La rama de `QueueEmpty` dentro de `publish()` cuando una queue llena se vacía justo entre el `full()` y el `get_nowait()` | Es una ventana de carrera dentro de un solo hilo de evento (no debería poder ocurrir en la práctica); el camino principal, descartar el mensaje más viejo, sí está probado |
 
-El relay del outbox (`app/events/relay.py`) llegó a 100%, pero no gracias al test que
-para el contenedor real de Redpanda — ver la nota en "Kafka y el relay del outbox" sobre
-por qué ese camino de fallo necesitó un productor falso aparte.
+El relay del outbox (`app/events/relay.py`) y el endpoint `/ws` llegaron a 100%, pero
+no gracias a los tests que dependen de infraestructura real (Redpanda, el contenedor
+Docker) — ver las notas correspondientes arriba sobre qué caminos de fallo necesitaron
+un doble de prueba aparte, y qué hueco (el de `uvicorn` sin backend de WS) solo la
+verificación manual contra el contenedor real terminó encontrando.
 
 ## Estado
 
@@ -604,4 +696,6 @@ Completadas: Fase 0 (fundación), Fase 1 (contratos de eventos), Fase 2 (dominio
 fairness y ruleta), Fase 3 (persistencia), Fase 4 (autenticación), Fase 5 (el caso de
 uso de apostar), Fase 6 (Kafka de verdad — productor, relay del outbox con backoff
 exponencial y limpieza periódica, verificado con Redpanda real incluyendo el contenedor
-cayendo a mitad de una tanda de apuestas). Siguiente: Fase 7 — WebSocket.
+cayendo a mitad de una tanda de apuestas), Fase 7 (WebSocket — `/ws` autenticado,
+heartbeat, límite de conexiones, cierre ordenado, notificaciones desacopladas de Kafka
+a propósito). Siguiente: Fase 8 — endurecimiento y observabilidad.

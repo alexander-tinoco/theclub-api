@@ -76,6 +76,11 @@ class Settings(BaseSettings):
     TABLE_MAX_BET_MINOR: int = Field(default=500_000, ge=1)
     IDEMPOTENCY_KEY_TTL_HOURS: int = Field(default=24, ge=1)
 
+    # --- WebSocket (Fase 7) --------------------------------------------------
+    WS_MAX_CONNECTIONS: int = Field(default=1000, ge=1)
+    WS_HEARTBEAT_INTERVAL_S: float = Field(default=20.0, gt=0)
+    WS_HEARTBEAT_TIMEOUT_S: float = Field(default=45.0, gt=0)
+
     @property
     def is_production(self) -> bool:
         return self.APP_ENV in ("staging", "prod")
