@@ -366,6 +366,46 @@ Verificado con un test que lanza 10 peticiones *de verdad* concurrentes
 clave, y comprueba en la base de datos que se creó exactamente una ronda y se
 debitó el stake exactamente una vez.
 
+### Auditoría honesta antes de la Fase 6
+
+Antes de seguir a Kafka, se pidió una auditoría explícita de huecos — no
+sobreingeniería, pero sí que lo que existe esté bien hecho. Lo que salió y se
+corrigió, todo con su test:
+
+- **Sin rate limiting en `/rounds` ni `/deposit`** — estaba solo en `/auth/*`,
+  y son justo los dos endpoints que mueven dinero de verdad. Ahora 30/minuto
+  en ambos.
+- **Sin `statement_timeout` en el motor de Postgres** — una consulta colgada
+  dejaba el request esperando para siempre. Ahora Postgres cancela sola
+  cualquier sentencia que tarde más de 30s (`connect_args`, vía `-c
+  statement_timeout`).
+- **`Idempotency-Key` sin tope de tamaño** y **`amount_minor` del depósito sin
+  tope superior** — ambos con validación explícita ahora (200 caracteres y
+  10.000.000 respectivamente).
+- **`assert` para invariantes de negocio** ("todo usuario tiene wallet",
+  "todo usuario tiene un seed pair activo") en vez de una excepción real —
+  `assert` desaparece si el intérprete corre con `-O`/`PYTHONOPTIMIZE`, así
+  que un invariante de negocio no debería depender de eso. Ahora es
+  `DataIntegrityError`, mapeada a 500 y registrada en el log — con tests que
+  la fuerzan tanto a nivel de servicio como a través del endpoint HTTP real.
+- **Ningún test validaba un evento *real* del outbox contra el JSON Schema**
+  de la Fase 1 — solo ejemplos estáticos. Ahora un test coloca una apuesta de
+  verdad, lee las filas que quedaron en `outbox`, y las valida contra
+  `contracts/events/`.
+- **`_enqueue_round_events()` recibía 18 parámetros sueltos** — señal de que
+  debía ser un objeto, no una lista de argumentos. Ahora es un solo
+  `_RoundContext` (dataclass), y de paso `place_bet`/`deposit`/`fairness`
+  devuelven resultados tipados (`PlaceBetResult`, `BalanceView`, etc.) en vez
+  de `dict[str, Any]` construido a mano — un typo en una clave ahora lo pilla
+  mypy en la construcción del dataclass, no un test en producción.
+
+Lo que se dejó tal cual, a propósito: el tamaño del pool de conexiones (los
+valores por defecto de SQLAlchemy — `max_overflow=10`, `pool_timeout=30` —
+ya dan margen razonable sin que hiciera falta tocar nada) y el crecimiento
+sin límite de la tabla `outbox` (es exactamente lo que la Fase 6 resuelve;
+construir un mecanismo de limpieza antes de tener el relay real sería
+adelantar trabajo sin saber todavía cómo lo va a consumir).
+
 ## Calidad y testing
 
 ### Metodología
@@ -425,7 +465,7 @@ test o la siguiente fase y darse cuenta de que algo no cuadraba.
 ### Cobertura
 
 ```
-TOTAL   1148 stmts   7 miss   110 branch   6 partial   99% cover
+TOTAL   1207 stmts   8 miss   126 branch   7 partial   99% cover
 ```
 
 Sin umbral mínimo en CI todavía (`pytest-cov` está configurado; el `--cov-fail-under`
@@ -436,6 +476,7 @@ se decide en la Fase 9). Los huecos que quedan están identificados, no son desc
 | `app/domain/fairness.py` | La rama de rejection sampling que pide un HMAC extra | Probabilidad ~10⁻⁹ de que ocurra; forzarla exigiría mockear `hmac` para un caso de valor dudoso |
 | `app/api/health.py` | El timeout de un readiness check | Necesitaría un check que duerma de verdad; el camino de "check que falla" sí está cubierto |
 | `app/services/idempotency.py` | Dos micro-carreras dentro de la propia carrera (dos reclamos simultáneos de la misma fila abandonada; el fallback final tras un segundo choque) | Exigiría inyectar temporización falsa para forzar un instante exacto; el mecanismo principal sí está probado bajo concurrencia real |
+| `app/api/v1/roulette.py` | `DataIntegrityError` si un `Round` quedara sin `outcome` | Mismo patrón que ya se prueba seis veces para wallet/seed pair; se dejó sin un séptimo test casi idéntico por rendimiento decreciente, no por no haberlo pensado |
 
 ## Estado
 

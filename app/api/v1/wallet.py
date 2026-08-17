@@ -9,8 +9,10 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.api.deps import CurrentUserDep, SessionDep, SessionFactoryDep, SettingsDep
 from app.api.pagination import decode_cursor, encode_cursor
+from app.api.rate_limit import limiter
 from app.services import wallet as wallet_service
-from app.services.idempotency import hash_request_body, run_idempotent
+from app.services.idempotency import IDEMPOTENCY_KEY_MAX_LENGTH, hash_request_body, run_idempotent
+from app.services.wallet import MAX_DEPOSIT_MINOR
 
 router = APIRouter(prefix="/wallet", tags=["wallet"])
 
@@ -22,7 +24,8 @@ class BalanceResponse(BaseModel):
 
 @router.get("/balance", response_model=BalanceResponse)
 async def get_balance(user: CurrentUserDep, session: SessionDep) -> dict[str, Any]:
-    return await wallet_service.get_balance(session, user_id=user.id)
+    result = await wallet_service.get_balance(session, user_id=user.id)
+    return result.to_dict()
 
 
 class TransactionItem(BaseModel):
@@ -73,7 +76,7 @@ async def list_transactions(
 class DepositRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    amount_minor: int = Field(gt=0)
+    amount_minor: int = Field(gt=0, le=MAX_DEPOSIT_MINOR)
 
 
 class DepositResponse(BaseModel):
@@ -82,25 +85,29 @@ class DepositResponse(BaseModel):
 
 
 @router.post("/deposit", response_model=DepositResponse)
+@limiter.limit("30/minute")
 async def deposit(
     request: Request,
     body: DepositRequest,
     user: CurrentUserDep,
     settings: SettingsDep,
     session_factory: SessionFactoryDep,
-    idempotency_key: Annotated[str, Header(alias="Idempotency-Key", min_length=1)],
+    idempotency_key: Annotated[
+        str, Header(alias="Idempotency-Key", min_length=1, max_length=IDEMPOTENCY_KEY_MAX_LENGTH)
+    ],
 ) -> dict[str, Any]:
     raw_body = await request.body()
     request_hash = hash_request_body(raw_body)
 
     async def work(session: Any) -> dict[str, Any]:
-        return await wallet_service.deposit(
+        result = await wallet_service.deposit(
             session,
             settings,
             user_id=user.id,
             idempotency_key=idempotency_key,
             amount_minor=body.amount_minor,
         )
+        return result.to_dict()
 
     return await run_idempotent(
         session_factory,

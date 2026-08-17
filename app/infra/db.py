@@ -1,8 +1,9 @@
 """Motor async de SQLAlchemy y unit of work.
 
-Un único `AsyncEngine` por proceso (se crea en el lifespan de FastAPI, a partir
-de la Fase 5); aquí solo se define cómo se construye y cómo se abre una
-transacción.
+Un único `AsyncEngine` por proceso, creado en `create_app()` (no en el
+lifespan: así los tests que no lo arrancan siguen teniendo un
+`db_session_factory` funcional); aquí solo se define cómo se construye y cómo
+se abre una transacción.
 """
 
 from collections.abc import AsyncIterator
@@ -15,9 +16,20 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
+#: Si una sola sentencia tarda más de esto, Postgres la cancela sola. Sin
+#: esto, una consulta colgada (deadlock, IO lento) deja el request esperando
+#: para siempre en vez de fallar con un error que se pueda manejar.
+STATEMENT_TIMEOUT_MS = 30_000
+
 
 def create_engine(database_url: str, *, pool_size: int) -> AsyncEngine:
-    return create_async_engine(database_url, pool_size=pool_size, pool_pre_ping=True)
+    return create_async_engine(
+        database_url,
+        pool_size=pool_size,
+        pool_pre_ping=True,
+        pool_timeout=30,
+        connect_args={"options": f"-c statement_timeout={STATEMENT_TIMEOUT_MS}"},
+    )
 
 
 def create_session_factory(engine: AsyncEngine) -> async_sessionmaker[AsyncSession]:

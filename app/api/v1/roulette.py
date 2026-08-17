@@ -9,11 +9,13 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.api.deps import CurrentUserDep, SessionDep, SessionFactoryDep, SettingsDep
 from app.api.pagination import decode_cursor, encode_cursor
+from app.api.rate_limit import limiter
 from app.domain.roulette.bets import Selection
 from app.domain.roulette.table import BetType
 from app.services import fairness as fairness_service
 from app.services import roulette as roulette_service
-from app.services.idempotency import hash_request_body, run_idempotent
+from app.services.exceptions import DataIntegrityError
+from app.services.idempotency import IDEMPOTENCY_KEY_MAX_LENGTH, hash_request_body, run_idempotent
 
 router = APIRouter(prefix="/roulette", tags=["roulette"])
 
@@ -38,12 +40,14 @@ class FairnessRotateResponse(BaseModel):
 
 @router.get("/fairness/current", response_model=FairnessCurrentResponse)
 async def fairness_current(user: CurrentUserDep, session: SessionDep) -> dict[str, Any]:
-    return await fairness_service.get_current_seed(session, user_id=user.id)
+    result = await fairness_service.get_current_seed(session, user_id=user.id)
+    return result.to_dict()
 
 
 @router.post("/fairness/rotate", response_model=FairnessRotateResponse)
 async def fairness_rotate(user: CurrentUserDep, session: SessionDep) -> dict[str, Any]:
-    return await fairness_service.rotate_seed(session, user_id=user.id)
+    result = await fairness_service.rotate_seed(session, user_id=user.id)
+    return result.to_dict()
 
 
 # --- rounds -------------------------------------------------------------------
@@ -82,13 +86,16 @@ class RoundResponse(BaseModel):
 
 
 @router.post("/rounds", response_model=RoundResponse, status_code=status.HTTP_201_CREATED)
+@limiter.limit("30/minute")
 async def create_round(
     request: Request,
     body: PlaceRoundRequest,
     user: CurrentUserDep,
     settings: SettingsDep,
     session_factory: SessionFactoryDep,
-    idempotency_key: Annotated[str, Header(alias="Idempotency-Key", min_length=1)],
+    idempotency_key: Annotated[
+        str, Header(alias="Idempotency-Key", min_length=1, max_length=IDEMPOTENCY_KEY_MAX_LENGTH)
+    ],
 ) -> dict[str, Any]:
     raw_body = await request.body()
     request_hash = hash_request_body(raw_body)
@@ -100,13 +107,14 @@ async def create_round(
             )
             for b in body.bets
         ]
-        return await roulette_service.place_bet(
+        result = await roulette_service.place_bet(
             session,
             settings,
             user_id=user.id,
             idempotency_key=idempotency_key,
             bet_requests=bet_requests,
         )
+        return result.to_dict()
 
     return await run_idempotent(
         session_factory,
@@ -144,7 +152,11 @@ async def list_rounds(
 
     items = []
     for r in rounds:
-        assert r.outcome is not None  # este juego resuelve la ronda de inmediato
+        if r.outcome is None:
+            # Este juego resuelve la ronda de inmediato: toda fila que
+            # create_settled_round crea ya trae outcome. Si esto salta, algo
+            # en otra parte del sistema violó ese contrato.
+            raise DataIntegrityError(f"round {r.id} sin outcome")
         items.append(
             RoundHistoryItem(
                 round_id=r.id,

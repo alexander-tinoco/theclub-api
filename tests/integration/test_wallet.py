@@ -108,3 +108,30 @@ async def test_transacciones_paginadas_por_cursor(client: AsyncClient) -> None:
     )
     assert len(page2.json()["items"]) == 1
     assert page2.json()["next_cursor"] is None
+
+
+async def test_deposit_monto_por_encima_del_tope_se_rechaza(client: AsyncClient) -> None:
+    headers = await _register(client)
+
+    response = await client.post(
+        "/api/v1/wallet/deposit",
+        json={"amount_minor": 10_000_001},
+        headers={**headers, "Idempotency-Key": str(uuid.uuid4())},
+    )
+
+    assert response.status_code == 422
+
+
+async def test_deposit_tiene_rate_limit(client: AsyncClient) -> None:
+    headers = await _register(client)
+
+    responses = [
+        await client.post(
+            "/api/v1/wallet/deposit",
+            json={"amount_minor": 100},
+            headers={**headers, "Idempotency-Key": str(uuid.uuid4())},
+        )
+        for _ in range(31)
+    ]
+
+    assert responses[-1].status_code == 429

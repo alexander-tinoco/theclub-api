@@ -156,6 +156,18 @@ async def test_reintento_misma_clave_misma_respuesta_sin_doble_cobro(client: Asy
     assert balance.json()["balance_minor"] == expected
 
 
+async def test_idempotency_key_demasiado_larga_se_rechaza(client: AsyncClient) -> None:
+    headers = await _register_and_fund(client)
+
+    response = await client.post(
+        "/api/v1/roulette/rounds",
+        json=_bet(),
+        headers={**headers, "Idempotency-Key": "k" * 201},
+    )
+
+    assert response.status_code == 422
+
+
 async def test_misma_clave_cuerpo_distinto_409(client: AsyncClient) -> None:
     headers = await _register_and_fund(client)
     key = str(uuid.uuid4())
@@ -214,3 +226,18 @@ async def test_historial_paginado_por_cursor(client: AsyncClient) -> None:
 
     seen_ids = {item["round_id"] for item in page1.json()["items"] + page2.json()["items"]}
     assert len(seen_ids) == 3  # sin repetidos ni saltados entre páginas
+
+
+async def test_rounds_tiene_rate_limit(client: AsyncClient) -> None:
+    headers = await _register_and_fund(client, balance_minor=1_000_000)
+
+    responses = [
+        await client.post(
+            "/api/v1/roulette/rounds",
+            json=_bet(stake_minor=100),
+            headers={**headers, "Idempotency-Key": str(uuid.uuid4())},
+        )
+        for _ in range(31)
+    ]
+
+    assert responses[-1].status_code == 429

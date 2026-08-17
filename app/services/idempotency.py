@@ -34,6 +34,11 @@ from app.repositories.idempotency import IdempotencyKeyRepository
 #: basura reclamable. Muy por encima de lo que tarda cualquier operación real.
 PENDING_RECLAIM_SECONDS = 30
 
+#: Tope del header Idempotency-Key. 200 es generoso para cualquier esquema de
+#: cliente razonable (UUID, ULID, etc.) y evita que alguien mande un string
+#: de varios megabytes que terminaría guardado tal cual en la tabla.
+IDEMPOTENCY_KEY_MAX_LENGTH = 200
+
 
 class IdempotencyKeyConflictError(Exception):
     """La misma Idempotency-Key se usó antes con un cuerpo de petición distinto."""

@@ -1,6 +1,7 @@
 """Casos de uso de wallet: balance, historial, depósito simulado."""
 
 import uuid
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
@@ -10,14 +11,31 @@ from app.config import Settings
 from app.domain.money import Money
 from app.events.outbox import enqueue_event, new_envelope
 from app.events.schemas import WalletTransactionData
+from app.models.ledger import LedgerEntry
 from app.repositories.ledger import LedgerRepository
 from app.repositories.wallets import WalletRepository
+from app.services.exceptions import DataIntegrityError
+
+#: Tope de sanidad para el depósito simulado — no hay pasarela de pago real
+#: detrás, así que no hay un límite de negocio "de verdad"; esto solo evita
+#: que un número desorbitado se cuele sin querer.
+MAX_DEPOSIT_MINOR = 10_000_000  # 100,000.00 en la divisa de la mesa
 
 
-async def get_balance(session: AsyncSession, *, user_id: uuid.UUID) -> dict[str, Any]:
+@dataclass(frozen=True, slots=True)
+class BalanceView:
+    balance_minor: int
+    currency: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"balance_minor": self.balance_minor, "currency": self.currency}
+
+
+async def get_balance(session: AsyncSession, *, user_id: uuid.UUID) -> BalanceView:
     wallet = await WalletRepository(session).get_by_user_id(user_id)
-    assert wallet is not None  # todo user tiene wallet desde el registro
-    return {"balance_minor": wallet.balance_minor, "currency": wallet.currency}
+    if wallet is None:
+        raise DataIntegrityError(f"user {user_id} sin wallet")
+    return BalanceView(balance_minor=wallet.balance_minor, currency=wallet.currency)
 
 
 async def list_transactions(
@@ -26,9 +44,10 @@ async def list_transactions(
     user_id: uuid.UUID,
     cursor: tuple[datetime, uuid.UUID] | None,
     limit: int,
-) -> list[Any]:
+) -> list[LedgerEntry]:
     wallet = await WalletRepository(session).get_by_user_id(user_id)
-    assert wallet is not None
+    if wallet is None:
+        raise DataIntegrityError(f"user {user_id} sin wallet")
     return await LedgerRepository(session).list_by_wallet(wallet.id, cursor=cursor, limit=limit)
 
 
@@ -39,10 +58,11 @@ async def deposit(
     user_id: uuid.UUID,
     idempotency_key: str,
     amount_minor: int,
-) -> dict[str, Any]:
+) -> BalanceView:
     wallets = WalletRepository(session)
     wallet = await wallets.get_by_user_id(user_id)
-    assert wallet is not None
+    if wallet is None:
+        raise DataIntegrityError(f"user {user_id} sin wallet")
 
     balance_after = await wallets.credit(wallet.id, Money(amount_minor))
 
@@ -70,4 +90,4 @@ async def deposit(
     )
     await enqueue_event(session, settings, envelope, key=str(user_id))
 
-    return {"balance_minor": balance_after, "currency": wallet.currency}
+    return BalanceView(balance_minor=balance_after, currency=wallet.currency)

@@ -17,14 +17,16 @@ from app.config import Settings
 from app.domain.fairness import SeedMaterial
 from app.domain.money import Money
 from app.domain.roulette.bets import PlacedBet, Selection, validate_bet
-from app.domain.roulette.engine import resolve_bets, spin
+from app.domain.roulette.engine import ResolvedBet, resolve_bets, spin
 from app.domain.roulette.table import BetType
 from app.events.outbox import enqueue_event, new_envelope
 from app.events.schemas import BetPlacedData, RoundSettledData, SettledBet, WalletTransactionData
+from app.models.round import Bet, Round
 from app.repositories.ledger import LedgerRepository
 from app.repositories.rounds import ResolvedBetInput, RoundRepository
 from app.repositories.seed_pairs import SeedPairRepository
 from app.repositories.wallets import WalletRepository
+from app.services.exceptions import DataIntegrityError
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,6 +38,69 @@ class BetRequest:
     stake_minor: int
 
 
+@dataclass(frozen=True, slots=True)
+class SettledBetView:
+    bet_type: BetType
+    selection: Selection
+    stake_minor: int
+    payout_minor: int
+    won: bool
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "bet_type": self.bet_type.value,
+            "selection": self.selection,
+            "stake_minor": self.stake_minor,
+            "payout_minor": self.payout_minor,
+            "won": self.won,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class PlaceBetResult:
+    round_id: uuid.UUID
+    outcome: int
+    bets: list[SettledBetView]
+    total_stake_minor: int
+    total_payout_minor: int
+    net_minor: int
+    balance_minor: int
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "round_id": str(self.round_id),
+            "outcome": self.outcome,
+            "bets": [b.to_dict() for b in self.bets],
+            "total_stake_minor": self.total_stake_minor,
+            "total_payout_minor": self.total_payout_minor,
+            "net_minor": self.net_minor,
+            "balance_minor": self.balance_minor,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class _RoundContext:
+    """Todo lo que `_enqueue_round_events` necesita, calculado una sola vez en
+    `place_bet` — evita pasar quince parámetros sueltos entre las dos funciones."""
+
+    user_id: uuid.UUID
+    wallet_id: uuid.UUID
+    round: Round
+    seed_pair_id: uuid.UUID
+    nonce: int
+    outcome: int
+    bet_rows: list[Bet]
+    resolved: list[ResolvedBet]
+    total_stake: int
+    total_payout: int
+    stake_entry_id: uuid.UUID
+    payout_entry_id: uuid.UUID | None
+    balance_after_stake: int
+    balance_after_payout: int | None
+    currency: str
+    idempotency_key: str
+
+
 async def place_bet(
     session: AsyncSession,
     settings: Settings,
@@ -43,7 +108,7 @@ async def place_bet(
     user_id: uuid.UUID,
     idempotency_key: str,
     bet_requests: list[BetRequest],
-) -> dict[str, Any]:
+) -> PlaceBetResult:
     placed_bets = [
         PlacedBet(bet_type=b.bet_type, selection=b.selection, stake=Money(b.stake_minor))
         for b in bet_requests
@@ -58,13 +123,15 @@ async def place_bet(
 
     wallets = WalletRepository(session)
     wallet = await wallets.get_by_user_id(user_id)
-    assert wallet is not None  # todo user tiene wallet desde el registro
+    if wallet is None:
+        raise DataIntegrityError(f"user {user_id} sin wallet")
 
     balance_after_stake = await wallets.debit(wallet.id, Money(total_stake))
 
     seed_pairs = SeedPairRepository(session)
     seed_pair = await seed_pairs.get_active_by_user_id(user_id)
-    assert seed_pair is not None  # todo user tiene un seed pair activo desde el registro
+    if seed_pair is None:
+        raise DataIntegrityError(f"user {user_id} sin seed pair activo")
 
     nonce = await seed_pairs.consume_nonce(seed_pair.id)
     seed_material = SeedMaterial(
@@ -109,6 +176,11 @@ async def place_bet(
     )
     payout_entry = None
     if total_payout > 0:
+        # Narrowing local, no de un dato externo: si total_payout > 0, la
+        # rama de arriba ya fijó balance_after_payout tres líneas antes — es
+        # un invariante del propio flujo de esta función, no de la base de
+        # datos, así que un `assert` (a diferencia de wallet/seed_pair) es
+        # apropiado aquí.
         assert balance_after_payout is not None
         payout_entry = await ledger.append(
             wallet_id=wallet.id,
@@ -122,89 +194,73 @@ async def place_bet(
     await _enqueue_round_events(
         session,
         settings,
-        user_id=user_id,
-        wallet_id=wallet.id,
-        round_=round_,
-        seed_pair_id=seed_pair.id,
-        nonce=nonce,
-        outcome=outcome,
-        bet_rows=bet_rows,
-        resolved=resolved,
-        total_stake=total_stake,
-        total_payout=total_payout,
-        stake_entry_id=stake_entry.id,
-        payout_entry_id=payout_entry.id if payout_entry is not None else None,
-        balance_after_stake=balance_after_stake,
-        balance_after_payout=balance_after_payout,
-        currency=wallet.currency,
-        idempotency_key=idempotency_key,
+        _RoundContext(
+            user_id=user_id,
+            wallet_id=wallet.id,
+            round=round_,
+            seed_pair_id=seed_pair.id,
+            nonce=nonce,
+            outcome=outcome,
+            bet_rows=bet_rows,
+            resolved=resolved,
+            total_stake=total_stake,
+            total_payout=total_payout,
+            stake_entry_id=stake_entry.id,
+            payout_entry_id=payout_entry.id if payout_entry is not None else None,
+            balance_after_stake=balance_after_stake,
+            balance_after_payout=balance_after_payout,
+            currency=wallet.currency,
+            idempotency_key=idempotency_key,
+        ),
     )
 
-    return {
-        "round_id": str(round_.id),
-        "outcome": outcome,
-        "bets": [
-            {
-                "bet_type": r.bet.bet_type.value,
-                "selection": r.bet.selection,
-                "stake_minor": r.bet.stake.minor,
-                "payout_minor": r.payout.minor,
-                "won": r.won,
-            }
-            for r in resolved
-        ],
-        "total_stake_minor": total_stake,
-        "total_payout_minor": total_payout,
-        "net_minor": total_payout - total_stake,
-        "balance_minor": final_balance,
-    }
-
-
-async def _enqueue_round_events(
-    session: AsyncSession,
-    settings: Settings,
-    *,
-    user_id: uuid.UUID,
-    wallet_id: uuid.UUID,
-    round_: Any,
-    seed_pair_id: uuid.UUID,
-    nonce: int,
-    outcome: int,
-    bet_rows: list[Any],
-    resolved: list[Any],
-    total_stake: int,
-    total_payout: int,
-    stake_entry_id: uuid.UUID,
-    payout_entry_id: uuid.UUID | None,
-    balance_after_stake: int,
-    balance_after_payout: int | None,
-    currency: str,
-    idempotency_key: str,
-) -> None:
-    for bet_row, r in zip(bet_rows, resolved, strict=True):
-        envelope = new_envelope(
-            "bet.placed",
-            BetPlacedData(
-                round_id=round_.id,
-                bet_id=bet_row.id,
-                user_id=user_id,
+    return PlaceBetResult(
+        round_id=round_.id,
+        outcome=outcome,
+        bets=[
+            SettledBetView(
                 bet_type=r.bet.bet_type,
                 selection=r.bet.selection,
                 stake_minor=r.bet.stake.minor,
-                currency=currency,
+                payout_minor=r.payout.minor,
+                won=r.won,
+            )
+            for r in resolved
+        ],
+        total_stake_minor=total_stake,
+        total_payout_minor=total_payout,
+        net_minor=total_payout - total_stake,
+        balance_minor=final_balance,
+    )
+
+
+async def _enqueue_round_events(
+    session: AsyncSession, settings: Settings, ctx: _RoundContext
+) -> None:
+    for bet_row, r in zip(ctx.bet_rows, ctx.resolved, strict=True):
+        envelope = new_envelope(
+            "bet.placed",
+            BetPlacedData(
+                round_id=ctx.round.id,
+                bet_id=bet_row.id,
+                user_id=ctx.user_id,
+                bet_type=r.bet.bet_type,
+                selection=r.bet.selection,
+                stake_minor=r.bet.stake.minor,
+                currency=ctx.currency,
             ),
-            idempotency_key=idempotency_key,
+            idempotency_key=ctx.idempotency_key,
         )
-        await enqueue_event(session, settings, envelope, key=str(user_id))
+        await enqueue_event(session, settings, envelope, key=str(ctx.user_id))
 
     round_envelope = new_envelope(
         "round.settled",
         RoundSettledData(
-            round_id=round_.id,
-            user_id=user_id,
-            seed_pair_id=seed_pair_id,
-            nonce=nonce,
-            outcome=outcome,
+            round_id=ctx.round.id,
+            user_id=ctx.user_id,
+            seed_pair_id=ctx.seed_pair_id,
+            nonce=ctx.nonce,
+            outcome=ctx.outcome,
             bets=[
                 SettledBet(
                     bet_id=b.id,
@@ -214,52 +270,54 @@ async def _enqueue_round_events(
                     payout_minor=r.payout.minor,
                     won=r.won,
                 )
-                for b, r in zip(bet_rows, resolved, strict=True)
+                for b, r in zip(ctx.bet_rows, ctx.resolved, strict=True)
             ],
-            total_stake_minor=total_stake,
-            total_payout_minor=total_payout,
-            net_minor=total_payout - total_stake,
-            currency=currency,
+            total_stake_minor=ctx.total_stake,
+            total_payout_minor=ctx.total_payout,
+            net_minor=ctx.total_payout - ctx.total_stake,
+            currency=ctx.currency,
         ),
-        idempotency_key=idempotency_key,
+        idempotency_key=ctx.idempotency_key,
     )
-    await enqueue_event(session, settings, round_envelope, key=str(user_id))
+    await enqueue_event(session, settings, round_envelope, key=str(ctx.user_id))
 
     stake_tx_envelope = new_envelope(
         "wallet.transaction",
         WalletTransactionData(
-            transaction_id=stake_entry_id,
-            user_id=user_id,
-            wallet_id=wallet_id,
+            transaction_id=ctx.stake_entry_id,
+            user_id=ctx.user_id,
+            wallet_id=ctx.wallet_id,
             kind="bet_stake",
-            amount_minor=-total_stake,
-            balance_after_minor=balance_after_stake,
-            currency=currency,
+            amount_minor=-ctx.total_stake,
+            balance_after_minor=ctx.balance_after_stake,
+            currency=ctx.currency,
             ref_type="round",
-            ref_id=round_.id,
+            ref_id=ctx.round.id,
         ),
-        idempotency_key=idempotency_key,
+        idempotency_key=ctx.idempotency_key,
     )
-    await enqueue_event(session, settings, stake_tx_envelope, key=str(user_id))
+    await enqueue_event(session, settings, stake_tx_envelope, key=str(ctx.user_id))
 
-    if payout_entry_id is not None:
-        assert balance_after_payout is not None
+    if ctx.payout_entry_id is not None:
+        # Mismo razonamiento que el assert de arriba en place_bet: narrowing
+        # local, payout_entry_id y balance_after_payout se fijan juntos.
+        assert ctx.balance_after_payout is not None
         payout_tx_envelope = new_envelope(
             "wallet.transaction",
             WalletTransactionData(
-                transaction_id=payout_entry_id,
-                user_id=user_id,
-                wallet_id=wallet_id,
+                transaction_id=ctx.payout_entry_id,
+                user_id=ctx.user_id,
+                wallet_id=ctx.wallet_id,
                 kind="bet_payout",
-                amount_minor=total_payout,
-                balance_after_minor=balance_after_payout,
-                currency=currency,
+                amount_minor=ctx.total_payout,
+                balance_after_minor=ctx.balance_after_payout,
+                currency=ctx.currency,
                 ref_type="round",
-                ref_id=round_.id,
+                ref_id=ctx.round.id,
             ),
-            idempotency_key=idempotency_key,
+            idempotency_key=ctx.idempotency_key,
         )
-        await enqueue_event(session, settings, payout_tx_envelope, key=str(user_id))
+        await enqueue_event(session, settings, payout_tx_envelope, key=str(ctx.user_id))
 
 
 async def list_rounds(
@@ -268,5 +326,5 @@ async def list_rounds(
     user_id: uuid.UUID,
     cursor: tuple[datetime, uuid.UUID] | None,
     limit: int,
-) -> list[Any]:
+) -> list[Round]:
     return await RoundRepository(session).list_by_user(user_id, cursor=cursor, limit=limit)

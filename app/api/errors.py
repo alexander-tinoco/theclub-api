@@ -5,6 +5,7 @@ un try/except en cada endpoint; FastAPI las intercepta con los handlers
 registrados aquí.
 """
 
+import logging
 from collections.abc import Awaitable, Callable
 
 from fastapi import FastAPI, Request, status
@@ -20,7 +21,10 @@ from app.services.auth import (
     RefreshTokenReusedError,
     UserSuspendedError,
 )
+from app.services.exceptions import DataIntegrityError
 from app.services.idempotency import IdempotencyInProgressError, IdempotencyKeyConflictError
+
+logger = logging.getLogger(__name__)
 
 ExceptionHandler = Callable[[Request, Exception], Awaitable[Response]]
 
@@ -51,6 +55,17 @@ def _make_handler(status_code: int, detail: str) -> ExceptionHandler:
     return handler
 
 
+async def _handle_data_integrity_error(request: Request, exc: Exception) -> Response:
+    # A diferencia del resto del mapa, esto nunca lo provoca el cliente — es
+    # un invariante de negocio roto en algún otro sitio del sistema. Se
+    # registra con nivel error para que no pase desapercibido en logs.
+    logger.error("DataIntegrityError en %s: %s", request.url.path, exc)
+    return JSONResponse(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, content={"detail": "error interno"}
+    )
+
+
 def register_error_handlers(app: FastAPI) -> None:
     for exc_type, (status_code, detail) in _ERROR_MAP.items():
         app.add_exception_handler(exc_type, _make_handler(status_code, detail))
+    app.add_exception_handler(DataIntegrityError, _handle_data_integrity_error)
