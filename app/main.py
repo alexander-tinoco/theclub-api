@@ -1,5 +1,7 @@
 """Ensamblado de la aplicación FastAPI."""
 
+import asyncio
+import contextlib
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -18,7 +20,9 @@ from app.api.health import router as health_router
 from app.api.rate_limit import limiter
 from app.api.v1.router import build_api_v1_router
 from app.config import Settings, get_settings
+from app.events.relay import relay_loop
 from app.infra.db import create_engine, create_session_factory
+from app.infra.kafka import check_kafka, create_producer
 
 logger = logging.getLogger(__name__)
 
@@ -32,18 +36,32 @@ async def _check_database(engine: AsyncEngine) -> None:
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Arranque y apagado de recursos de larga vida.
 
-    El engine se crea en `create_app()`, no aquí — así los tests que no
-    arrancan el lifespan (`ASGITransport` a secas) siguen teniendo un
-    `db_session_factory` funcional. Este bloque solo loguea y cierra el
-    engine al apagar. Fase 6 añadirá aquí el productor de Kafka y el relay
-    del outbox, con su propio check en `app.state.readiness`.
+    A diferencia del engine de Postgres, el productor de Kafka *no* se puede
+    construir en `create_app()`: `AIOKafkaProducer` exige un event loop
+    corriendo incluso para instanciarse, no solo para conectar — así que
+    tanto su creación como el `start()` viven aquí, junto con el registro del
+    check `"kafka"` (a diferencia de `"database"`, que sí se registra en
+    `create_app()`). Un test que no arranca el lifespan simplemente no ve
+    `"kafka"` en `/ready` — igual que antes de que esta fase existiera.
     """
     settings: Settings = app.state.settings
     logger.info(
         "Arrancando %s v%s (env=%s)", settings.APP_NAME, settings.APP_VERSION, settings.APP_ENV
     )
 
+    producer = create_producer(settings)
+    await producer.start()
+    app.state.kafka_producer = producer
+    app.state.readiness.register("kafka", lambda: check_kafka(producer, settings))
+
+    relay_task = asyncio.create_task(relay_loop(app.state.db_session_factory, producer, settings))
+
     yield
+
+    relay_task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await relay_task
+    await producer.stop()
 
     await app.state.db_engine.dispose()
     logger.info("Apagando %s", settings.APP_NAME)

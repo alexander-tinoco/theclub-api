@@ -28,6 +28,10 @@ class OutboxEvent(Base):
     published_at: Mapped[datetime | None]
     attempts: Mapped[int] = mapped_column(default=0)
     last_error: Mapped[str | None]
+    # NULL = elegible de inmediato. Tras un fallo se pone en el futuro (backoff
+    # exponencial) para que una fila que falla no se reintente en cada poll
+    # (cada 500ms por defecto) mientras Kafka esté caído.
+    next_attempt_at: Mapped[datetime | None]
 
     __table_args__ = (
         Index(

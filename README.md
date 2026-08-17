@@ -64,7 +64,8 @@ make db-revision m="mensaje"  # autogenera una migración a partir de los modelo
 
 - `GET /health` — *liveness*. No consulta ninguna dependencia; si responde, el proceso vive.
 - `GET /ready` — *readiness*. Ejecuta los checks registrados y devuelve `503` si alguno falla.
-  Desde la Fase 3 registra `database` (un `SELECT 1` contra Postgres); la Fase 6 añadirá `kafka`.
+  Registra `database` (un `SELECT 1` contra Postgres, desde la Fase 3) y, desde la Fase 6,
+  `kafka` (pide los metadatos de un topic real al productor).
 - `POST /api/v1/auth/register` — email + password → crea `User` + `Wallet` en cero + el primer
   `SeedPair` activo, devuelve tokens.
 - `POST /api/v1/auth/login` — email + password → tokens.
@@ -109,6 +110,7 @@ flowchart TB
     subgraph EVENTS["app/events — contratos hacia Kafka"]
         schemas["schemas.py<br/>EventEnvelope, BetPlacedData,<br/>RoundSettledData, WalletTransactionData"]
         outbox["outbox.py<br/>enqueue_event"]
+        relay["relay.py<br/>relay_loop — tarea de fondo"]
     end
 
     subgraph DOMAIN["app/domain — nucleo puro, sin IO"]
@@ -124,10 +126,11 @@ flowchart TB
         repos["repositories/*<br/>Wallet · Ledger · User · RefreshToken<br/>SeedPair · Round · Idempotency"]
         db_infra["infra/db.py<br/>engine async · unit_of_work"]
         security["infra/security.py<br/>argon2id · JWT"]
+        kafka_infra["infra/kafka.py<br/>create_producer · check_kafka"]
     end
 
-    subgraph KAFKA["Fase 6 — pendiente"]
-        kafka[("Kafka / Redpanda")]
+    subgraph KAFKA["Kafka / Redpanda"]
+        kafka[("topics .v1<br/>bets.placed · rounds.settled<br/>wallet.transactions")]
     end
 
     postgres[("Postgres")]
@@ -147,7 +150,11 @@ flowchart TB
     authsvc --> repos
     authsvc --> security
     health --> db_infra
-    outbox -. Fase 6 .-> KAFKA
+    health --> kafka_infra
+    outbox --> models
+    relay --> models
+    relay --> kafka_infra
+    kafka_infra --> kafka
 
     repos --> models
     repos --> db_infra
@@ -160,8 +167,9 @@ flowchart TB
     engine --> money
 ```
 
-Las líneas punteadas son integraciones que todavía no existen (se activan en la fase
-indicada); las sólidas ya están escritas y probadas.
+Todo el diagrama son integraciones ya escritas y probadas — la última pieza en llegar
+fue `relay.py`/`infra/kafka.py` en la Fase 6, cerrando el camino hacia Kafka que hasta
+entonces terminaba en la tabla `outbox`.
 
 ### El dominio de la ruleta
 
@@ -368,6 +376,54 @@ Verificado con un test que lanza 10 peticiones *de verdad* concurrentes
 clave, y comprueba en la base de datos que se creó exactamente una ronda y se
 debitó el stake exactamente una vez.
 
+### Kafka y el relay del outbox
+
+Los servicios (Fase 5) nunca hablan con Kafka directamente — solo escriben en la tabla
+`outbox`, dentro de la misma transacción que el negocio. `app/events/relay.py` es un
+proceso aparte (una tarea de `asyncio` en el `lifespan`, no un servicio separado por
+ahora) que sondea esa tabla cada `OUTBOX_POLL_INTERVAL_MS` (500ms por defecto), publica
+con un `AIOKafkaProducer` (`acks="all"`, `enable_idempotence=True`) y marca cada fila.
+
+```mermaid
+sequenceDiagram
+    participant S as place_bet (Fase 5)
+    participant DB as Postgres — outbox
+    participant R as relay_loop
+    participant K as Kafka / Redpanda
+
+    S->>DB: INSERT outbox (misma TX que el negocio)
+    Note over S,DB: commit — o no existió nunca
+
+    loop cada 500ms
+        R->>DB: SELECT ... WHERE published_at IS NULL<br/>FOR UPDATE SKIP LOCKED
+        DB-->>R: lote de filas pendientes
+        R->>K: send_and_wait(topic, payload)
+        alt éxito
+            K-->>R: ack
+            R->>DB: UPDATE published_at = now()
+        else Kafka caído / error de red
+            R->>DB: UPDATE attempts += 1, next_attempt_at = now() + backoff
+        end
+    end
+```
+
+`FOR UPDATE SKIP LOCKED` es lo que permitiría correr varias instancias del relay a la
+vez sin coordinación extra: cada una se queda con lo que logró bloquear y salta lo que
+otra ya tomó, en vez de esperar o duplicar el envío — hoy solo hay una instancia, pero
+el mecanismo ya está ahí para cuando haga falta escalar. El backoff es exponencial con
+tope (`2s, 4s, 8s... hasta 60s`), para que una fila que falla no se reintente en cada
+poll mientras Kafka esté caído, sin dejar de reintentar indefinidamente.
+
+Verificado parando el contenedor real de Redpanda a mitad de una tanda de apuestas
+(`docker compose stop redpanda`, no un mock): apostar sigue devolviendo `201` y el
+dinero se mueve con normalidad — el `outbox` simplemente acumula filas con
+`published_at IS NULL` — y al reiniciar el contenedor el relay las drena solo, sin
+intervención manual. El camino de fallo por fila (`mark_failed`, backoff) se probó
+aparte con un productor falso: cuando Redpanda vuelve a tiempo dentro de la ventana del
+test, `AIOKafkaProducer` reintenta internamente y el envío nunca llega a lanzar hasta
+nuestro código, así que ese test con el contenedor real nunca ejercita esa rama —
+forzar el fallo con un doble de prueba fue la única forma de probarla de verdad.
+
 ### Auditoría honesta antes de la Fase 6
 
 Antes de seguir a Kafka, se pidió una auditoría explícita de huecos — no
@@ -420,6 +476,37 @@ inexistente, nunca es un error — así no revela si un token pertenece a
 otra cuenta), y compara `stored.user_id` contra el usuario autenticado para
 que nadie pueda cerrarle la sesión a otro pasando su refresh token en el
 cuerpo.
+
+### Un límite real descubierto en la Fase 6, no corregido a propósito
+
+`AIOKafkaProducer` no tolera un broker inalcanzable **al arrancar**: `producer.start()`
+intenta hacer *bootstrap* de los metadatos del cluster y, si no consigue conectar con
+ninguno de los hosts configurados, lanza `KafkaConnectionError` — y como esa llamada
+vive en el `lifespan` de FastAPI, eso tumba el arranque completo de la aplicación, no
+solo el productor. Se descubrió al intentar escribir el test de la caída de Kafka
+apagando el contenedor *antes* de crear la app: la app ni llegaba a levantar.
+
+Es un escenario distinto al que cubre el diseño (Kafka que cae **mientras la app ya
+está corriendo** — ver el diagrama de arriba) y el que describe el DoD de esta fase, así
+que no se resolvió: hacerlo bien pediría reintentar `producer.start()` con backoff en
+segundo plano en vez de esperarlo de forma síncrona en el lifespan, y decidir qué debe
+reportar `/health`/`/ready` mientras tanto — un cambio de diseño real, no una línea
+suelta, y por eso no entra en esta fase sin que se pida explícitamente. Queda anotado
+aquí en vez de maquillado: si `theclub-api` se despliega alguna vez detrás de un
+orquestador que reinicia procesos que fallan al arrancar, un Kafka lento en levantar al
+mismo tiempo que la API haría que la API reintente arrancar en bucle hasta que Kafka
+esté listo — molesto, pero no silencioso ni corruptor de datos.
+
+De paso, otros dos matices que salieron al escribir los tests de esta fase, ninguno
+grave: el test de "apostar publica eventos reales" tuvo que filtrar los mensajes
+consumidos por `user_id` porque los topics de Kafka son *append-only* y no se limpian
+entre corridas de test como sí lo hacen las tablas de Postgres (vía `_clean_tables`) —
+un consumer group nuevo con `auto_offset_reset="earliest"` lee todo el historial, no
+solo lo que produjo esa corrida. Y el check `kafka` de `/ready` usa
+`producer.partitions_for(topic)`, que devuelve metadata *cacheada* del cluster si ya la
+tiene — así que no es una prueba fiable de que Kafka acaba de caerse en el segundo
+exacto en que se apagó el contenedor, solo de que en algún momento reciente fue
+alcanzable.
 
 ## Calidad y testing
 
@@ -480,7 +567,7 @@ test o la siguiente fase y darse cuenta de que algo no cuadraba.
 ### Cobertura
 
 ```
-TOTAL   1215 stmts   8 miss   128 branch   7 partial   99% cover
+TOTAL   1295 stmts   10 miss   136 branch   8 partial   99% cover
 ```
 
 Sin umbral mínimo en CI todavía (`pytest-cov` está configurado; el `--cov-fail-under`
@@ -490,11 +577,18 @@ se decide en la Fase 9). Los huecos que quedan están identificados, no son desc
 |---|---|---|
 | `app/domain/fairness.py` | La rama de rejection sampling que pide un HMAC extra | Probabilidad ~10⁻⁹ de que ocurra; forzarla exigiría mockear `hmac` para un caso de valor dudoso |
 | `app/api/health.py` | El timeout de un readiness check | Necesitaría un check que duerma de verdad; el camino de "check que falla" sí está cubierto |
+| `app/infra/kafka.py` | La rama SASL de `create_producer` | No hay broker con SASL en dev/test; se ejercita construyendo `Settings` con esas credenciales en `test_config.py`, pero no el productor real |
 | `app/services/idempotency.py` | Dos micro-carreras dentro de la propia carrera (dos reclamos simultáneos de la misma fila abandonada; el fallback final tras un segundo choque) | Exigiría inyectar temporización falsa para forzar un instante exacto; el mecanismo principal sí está probado bajo concurrencia real |
 | `app/api/v1/roulette.py` | `DataIntegrityError` si un `Round` quedara sin `outcome` | Mismo patrón que ya se prueba seis veces para wallet/seed pair; se dejó sin un séptimo test casi idéntico por rendimiento decreciente, no por no haberlo pensado |
+
+El relay del outbox (`app/events/relay.py`) llegó a 100%, pero no gracias al test que
+para el contenedor real de Redpanda — ver la nota en "Kafka y el relay del outbox" sobre
+por qué ese camino de fallo necesitó un productor falso aparte.
 
 ## Estado
 
 Completadas: Fase 0 (fundación), Fase 1 (contratos de eventos), Fase 2 (dominio de
 fairness y ruleta), Fase 3 (persistencia), Fase 4 (autenticación), Fase 5 (el caso de
-uso de apostar). Siguiente: Fase 6 — Kafka de verdad (productor + relay del outbox).
+uso de apostar), Fase 6 (Kafka de verdad — productor, relay del outbox con backoff
+exponencial, verificado con Redpanda real incluyendo el contenedor cayendo a mitad de
+una tanda de apuestas). Siguiente: Fase 7 — WebSocket.
