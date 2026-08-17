@@ -70,6 +70,8 @@ class Settings(BaseSettings):
 
     # --- juego y outbox (Fases 5 y 6) ---------------------------------------
     OUTBOX_POLL_INTERVAL_MS: int = Field(default=500, ge=50)
+    OUTBOX_RETENTION_HOURS: int = Field(default=24 * 7, ge=1)
+    OUTBOX_CLEANUP_INTERVAL_S: int = Field(default=3600, ge=60)
     TABLE_MIN_BET_MINOR: int = Field(default=100, ge=1)
     TABLE_MAX_BET_MINOR: int = Field(default=500_000, ge=1)
     IDEMPOTENCY_KEY_TTL_HOURS: int = Field(default=24, ge=1)

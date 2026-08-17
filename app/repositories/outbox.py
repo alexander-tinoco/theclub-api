@@ -6,8 +6,9 @@ solo el relay, que es quien lee, publica y marca.
 
 import uuid
 from datetime import UTC, datetime, timedelta
+from typing import Any, cast
 
-from sqlalchemy import select, update
+from sqlalchemy import CursorResult, delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.outbox import OutboxEvent
@@ -61,3 +62,18 @@ class OutboxRepository:
                 next_attempt_at=datetime.now(UTC) + timedelta(seconds=backoff_seconds),
             )
         )
+
+    async def purge_published(self, *, older_than: datetime) -> int:
+        """Borra filas ya publicadas más viejas que `older_than`. Sin esto la
+        tabla crece para siempre aunque el relay funcione perfecto — cada
+        fila publicada se queda ahí. Las filas sin publicar nunca se tocan,
+        sin importar su edad: solo `published_at IS NOT NULL` es candidato.
+        """
+        result = await self._session.execute(
+            delete(OutboxEvent)
+            .where(OutboxEvent.published_at.is_not(None))
+            .where(OutboxEvent.published_at < older_than)
+        )
+        # `execute()` de un DELETE devuelve un CursorResult en tiempo real
+        # (trae rowcount); el tipo genérico de SQLAlchemy no lo refleja.
+        return cast("CursorResult[Any]", result).rowcount

@@ -14,6 +14,7 @@ import subprocess
 import uuid
 
 import pytest
+from aiokafka import AIOKafkaProducer
 from asgi_lifespan import LifespanManager
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
@@ -48,23 +49,29 @@ def _compose(*args: str) -> None:
     )
 
 
-async def _wait_for_redpanda_ready(
-    session_factory: async_sessionmaker[AsyncSession], timeout_seconds: float = 30.0
-) -> None:
+async def _wait_for_redpanda_ready(bootstrap_servers: str, timeout_seconds: float = 30.0) -> None:
     """`docker compose start` devuelve el control antes de que el broker
     termine de aceptar conexiones — hay que esperar activamente antes de
-    seguir, o el resto del test corre contra un broker que aún no escucha.
+    seguir, o el resto del test (y el siguiente que corra contra el mismo
+    Redpanda) puede toparse con un broker que técnicamente ya escucha en el
+    puerto pero todavía no terminó de elegir líder para cada partición.
+
+    Probar contra Postgres aquí (que nunca se detuvo) no serviría: hay que
+    intentar un `bootstrap()` real de Kafka, no otra dependencia que ya
+    estaba arriba todo el tiempo.
     """
     deadline = asyncio.get_event_loop().time() + timeout_seconds
     last_error: Exception | None = None
     while asyncio.get_event_loop().time() < deadline:
+        producer = AIOKafkaProducer(bootstrap_servers=bootstrap_servers)
         try:
-            async with session_factory() as session:
-                await session.execute(select(1))
+            await producer.start()
             return
         except Exception as exc:
             last_error = exc
             await asyncio.sleep(1)
+        finally:
+            await producer.stop()
     raise TimeoutError(f"Redpanda no volvió a tiempo: {last_error}")
 
 
@@ -135,7 +142,7 @@ async def test_apuesta_sobrevive_a_kafka_caido_y_el_relay_drena_al_volver(
             assert all(row.published_at is None for row in rows)
 
             _compose("start", REDPANDA_SERVICE)
-            await _wait_for_redpanda_ready(session_factory)
+            await _wait_for_redpanda_ready(integration_settings.KAFKA_BOOTSTRAP_SERVERS)
 
             deadline = asyncio.get_event_loop().time() + 30
             all_published = False

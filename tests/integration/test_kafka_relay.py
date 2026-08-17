@@ -93,6 +93,11 @@ async def test_apostar_publica_los_3_eventos_en_kafka_real(
                 headers={**headers, "Idempotency-Key": str(uuid.uuid4())},
             )
             assert response.status_code == 201
+            # El resultado es aleatorio: si la apuesta gana, `place_bet`
+            # encola un evento wallet.transaction extra (`bet_payout`) además
+            # del `bet_stake` — no asumir un conteo fijo de eventos, calcularlo
+            # a partir de lo que de verdad pasó.
+            won = response.json()["bets"][0]["won"]
 
             ready = await client.get("/ready")
             assert ready.json()["checks"]["kafka"] == "ok"
@@ -101,14 +106,18 @@ async def test_apostar_publica_los_3_eventos_en_kafka_real(
         # se le da tiempo antes de cerrar el lifespan (que cancela la tarea).
         await asyncio.sleep(2)
 
+    # deposit + bet.placed + round.settled + bet_stake, y bet_payout si ganó.
+    expected_events = 4 + (1 if won else 0)
+    expected_wallet_kinds = {"deposit", "bet_stake"} | ({"bet_payout"} if won else set())
+
     messages = await _consume(
         EXPECTED_TOPICS,
         bootstrap_servers=integration_settings.KAFKA_BOOTSTRAP_SERVERS,
         user_id=user_id,
-        expected=4,
+        expected=expected_events,
     )
 
-    assert len(messages) >= 4  # deposit + bet.placed + round.settled + bet_stake
+    assert len(messages) >= expected_events
     seen_by_topic: dict[str, list[dict[str, Any]]] = {topic: [] for topic in EXPECTED_TOPICS}
     for msg in messages:
         payload = json.loads(msg.value)
@@ -120,9 +129,7 @@ async def test_apostar_publica_los_3_eventos_en_kafka_real(
     assert len(seen_by_topic["theclub.rounds.settled.v1"]) == 1
     assert seen_by_topic["theclub.rounds.settled.v1"][0]["event_type"] == "round.settled"
 
-    # deposit + bet_stake: dos wallet.transaction
-    assert len(seen_by_topic["theclub.wallet.transactions.v1"]) == 2
-    assert {e["data"]["kind"] for e in seen_by_topic["theclub.wallet.transactions.v1"]} == {
-        "deposit",
-        "bet_stake",
-    }
+    assert len(seen_by_topic["theclub.wallet.transactions.v1"]) == len(expected_wallet_kinds)
+    assert {
+        e["data"]["kind"] for e in seen_by_topic["theclub.wallet.transactions.v1"]
+    } == expected_wallet_kinds

@@ -111,6 +111,7 @@ flowchart TB
         schemas["schemas.py<br/>EventEnvelope, BetPlacedData,<br/>RoundSettledData, WalletTransactionData"]
         outbox["outbox.py<br/>enqueue_event"]
         relay["relay.py<br/>relay_loop — tarea de fondo"]
+        cleanup["outbox_cleanup.py<br/>purge_loop — tarea de fondo"]
     end
 
     subgraph DOMAIN["app/domain — nucleo puro, sin IO"]
@@ -154,6 +155,7 @@ flowchart TB
     outbox --> models
     relay --> models
     relay --> kafka_infra
+    cleanup --> models
     kafka_infra --> kafka
 
     repos --> models
@@ -477,7 +479,20 @@ otra cuenta), y compara `stored.user_id` contra el usuario autenticado para
 que nadie pueda cerrarle la sesión a otro pasando su refresh token en el
 cuerpo.
 
-### Un límite real descubierto en la Fase 6, no corregido a propósito
+### Limpieza del outbox
+
+El relay publica y marca cada fila, pero nunca las borra — sin nada más, la tabla
+`outbox` crecería para siempre aunque Kafka jamás fallara. `app/events/outbox_cleanup.py`
+es un segundo proceso de fondo, independiente del relay, que corre en su propio
+intervalo (`OUTBOX_CLEANUP_INTERVAL_S`, 1 hora por defecto — no hay prisa, una fila
+publicada hace un rato no molesta a nadie) y borra las filas publicadas hace más de
+`OUTBOX_RETENTION_HOURS` (7 días por defecto). Nunca toca una fila sin publicar, sin
+importar su edad: solo `published_at IS NOT NULL` es candidato a borrarse. Mismo patrón
+de resiliencia que el relay — un ciclo que falla se registra y se reintenta en el
+siguiente, no mata la tarea de fondo — probado igual, forzando el fallo con un doble en
+vez de esperar a que algo se rompa de verdad.
+
+### Kafka caído al arrancar: falla rápido, a propósito
 
 `AIOKafkaProducer` no tolera un broker inalcanzable **al arrancar**: `producer.start()`
 intenta hacer *bootstrap* de los metadatos del cluster y, si no consigue conectar con
@@ -487,15 +502,12 @@ solo el productor. Se descubrió al intentar escribir el test de la caída de Ka
 apagando el contenedor *antes* de crear la app: la app ni llegaba a levantar.
 
 Es un escenario distinto al que cubre el diseño (Kafka que cae **mientras la app ya
-está corriendo** — ver el diagrama de arriba) y el que describe el DoD de esta fase, así
-que no se resolvió: hacerlo bien pediría reintentar `producer.start()` con backoff en
-segundo plano en vez de esperarlo de forma síncrona en el lifespan, y decidir qué debe
-reportar `/health`/`/ready` mientras tanto — un cambio de diseño real, no una línea
-suelta, y por eso no entra en esta fase sin que se pida explícitamente. Queda anotado
-aquí en vez de maquillado: si `theclub-api` se despliega alguna vez detrás de un
-orquestador que reinicia procesos que fallan al arrancar, un Kafka lento en levantar al
-mismo tiempo que la API haría que la API reintente arrancar en bucle hasta que Kafka
-esté listo — molesto, pero no silencioso ni corruptor de datos.
+está corriendo** — ver el diagrama de arriba), y se decidió a propósito dejarlo así en
+vez de añadir reintentos con backoff alrededor de `producer.start()`: si Kafka no está
+disponible cuando la API intenta arrancar, mejor que el proceso falle alto y claro (y lo
+reinicie el orquestador cuando corresponda) que levantar una API a medias que reporte
+"lista" sin poder publicar nada. Es la misma filosofía que ya aplica el resto del
+proyecto — fallar rápido y explícito en vez de degradar en silencio.
 
 De paso, otros dos matices que salieron al escribir los tests de esta fase, ninguno
 grave: el test de "apostar publica eventos reales" tuvo que filtrar los mensajes
@@ -551,7 +563,7 @@ escribimos a mano, sigue linteado normalmente.
 
 ### Bugs reales encontrados durante el desarrollo
 
-No es una lista de virtudes — son cuatro errores que el propio proceso de escribir tests y
+No es una lista de virtudes — son errores que el propio proceso de escribir tests y
 razonar el diseño encontró antes de que llegaran a ningún sitio importante:
 
 | Fase | Qué estaba mal | Cómo se encontró |
@@ -560,14 +572,15 @@ razonar el diseño encontró antes de que llegaran a ningún sitio importante:
 | 3 | Las columnas de fecha eran `TIMESTAMP` sin zona horaria, contra lo que el propio plan decía ("todos los timestamps en TIMESTAMPTZ UTC") | Al necesitar comparar `datetime.now(UTC)` con `expires_at` en la Fase 4 |
 | 4 | Revocar la familia entera de refresh tokens al detectar un reuso no sobrevivía: el rollback automático de la transacción deshacía la revocación justo antes de guardarla | Un test de integración que reintentaba el token ya rotado tras el "robo" |
 | 5 | Al reclamar una fila `idempotency_keys` abandonada, un `session.begin()` chocaba contra la transacción que SQLAlchemy ya había auto-iniciado con el `SELECT` anterior — habría sido un 500 permanente la primera vez que un proceso muriera a medio camino | Un test que simula esa fila abandonada a mano y comprueba que el reclamo de verdad ejecuta el negocio |
+| 6 | El test de "apostar publica eventos reales" asumía un conteo fijo de eventos (4) y de tipos de `wallet.transaction` (siempre `deposit` + `bet_stake`) — pero el giro es aleatorio: si la apuesta *gana*, `place_bet` encola un evento extra (`bet_payout`), y el test fallaba de forma intermitente (~50%, justo la probabilidad de un giro a rojo) sin que nada estuviera roto en el código de producción | Corriendo el test repetidas veces y notando que fallaba solo a veces, nunca de forma reproducible al primer intento — hasta instrumentar el outbox real y ver 5 filas donde se esperaban 4 |
 
-Ninguno lo encontró una revisión manual — los cuatro salieron de escribir el siguiente
+Ninguno lo encontró una revisión manual — todos salieron de escribir el siguiente
 test o la siguiente fase y darse cuenta de que algo no cuadraba.
 
 ### Cobertura
 
 ```
-TOTAL   1295 stmts   10 miss   136 branch   8 partial   99% cover
+TOTAL   1328 stmts   10 miss   140 branch   8 partial   99% cover
 ```
 
 Sin umbral mínimo en CI todavía (`pytest-cov` está configurado; el `--cov-fail-under`
@@ -590,5 +603,5 @@ por qué ese camino de fallo necesitó un productor falso aparte.
 Completadas: Fase 0 (fundación), Fase 1 (contratos de eventos), Fase 2 (dominio de
 fairness y ruleta), Fase 3 (persistencia), Fase 4 (autenticación), Fase 5 (el caso de
 uso de apostar), Fase 6 (Kafka de verdad — productor, relay del outbox con backoff
-exponencial, verificado con Redpanda real incluyendo el contenedor cayendo a mitad de
-una tanda de apuestas). Siguiente: Fase 7 — WebSocket.
+exponencial y limpieza periódica, verificado con Redpanda real incluyendo el contenedor
+cayendo a mitad de una tanda de apuestas). Siguiente: Fase 7 — WebSocket.

@@ -20,6 +20,7 @@ from app.api.health import router as health_router
 from app.api.rate_limit import limiter
 from app.api.v1.router import build_api_v1_router
 from app.config import Settings, get_settings
+from app.events.outbox_cleanup import purge_loop
 from app.events.relay import relay_loop
 from app.infra.db import create_engine, create_session_factory
 from app.infra.kafka import check_kafka, create_producer
@@ -55,12 +56,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.readiness.register("kafka", lambda: check_kafka(producer, settings))
 
     relay_task = asyncio.create_task(relay_loop(app.state.db_session_factory, producer, settings))
+    purge_task = asyncio.create_task(purge_loop(app.state.db_session_factory, settings))
 
     yield
 
-    relay_task.cancel()
-    with contextlib.suppress(asyncio.CancelledError):
-        await relay_task
+    for task in (relay_task, purge_task):
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
     await producer.stop()
 
     await app.state.db_engine.dispose()
