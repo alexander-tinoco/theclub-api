@@ -83,6 +83,9 @@ class Settings(BaseSettings):
     WS_CONNECT_RATE_LIMIT_ATTEMPTS: int = Field(default=10, ge=1)
     WS_CONNECT_RATE_LIMIT_WINDOW_S: float = Field(default=60.0, gt=0)
 
+    # --- endurecimiento (Fase 8) ---------------------------------------------
+    MAX_REQUEST_BODY_BYTES: int = Field(default=1_000_000, ge=1024)
+
     @property
     def is_production(self) -> bool:
         return self.APP_ENV in ("staging", "prod")

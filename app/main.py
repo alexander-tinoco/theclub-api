@@ -17,6 +17,7 @@ from starlette.middleware.cors import CORSMiddleware
 from app.api.errors import register_error_handlers
 from app.api.health import ReadinessRegistry
 from app.api.health import router as health_router
+from app.api.middleware import MaxBodySizeMiddleware
 from app.api.rate_limit import limiter
 from app.api.request_context import RequestContextMiddleware
 from app.api.v1.router import build_api_v1_router
@@ -128,6 +129,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         allow_methods=["GET", "POST"],
         allow_headers=["Authorization", "Content-Type", "Idempotency-Key"],
     )
+
+    app.add_middleware(MaxBodySizeMiddleware, max_body_bytes=settings.MAX_REQUEST_BODY_BYTES)
 
     # El último `add_middleware` queda más afuera en tiempo de ejecución
     # (`Starlette.add_middleware` inserta cada uno al *principio* de su
