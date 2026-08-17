@@ -70,6 +70,8 @@ make db-revision m="mensaje"  # autogenera una migración a partir de los modelo
 - `POST /api/v1/auth/login` — email + password → tokens.
 - `POST /api/v1/auth/refresh` — rota el refresh token (ver más abajo).
 - `GET /api/v1/auth/me` — requiere `Authorization: Bearer <access_token>`.
+- `POST /api/v1/auth/logout` — revoca la familia del refresh token del cuerpo. Idempotente
+  (repetirlo, o mandar un token ajeno o inexistente, nunca es un error — `204` igual).
 - `GET /api/v1/roulette/fairness/current` — hash del seed activo + client_seed.
 - `POST /api/v1/roulette/fairness/rotate` — revela el seed anterior, activa uno nuevo.
 - `POST /api/v1/roulette/rounds` — coloca una o más apuestas y resuelve la ronda en la misma
@@ -406,6 +408,19 @@ sin límite de la tabla `outbox` (es exactamente lo que la Fase 6 resuelve;
 construir un mecanismo de limpieza antes de tener el relay real sería
 adelantar trabajo sin saber todavía cómo lo va a consumir).
 
+Una segunda pasada encontró un hueco funcional real, no solo de robustez:
+**no existía forma de cerrar sesión.** `RefreshTokenRepository.revoke_family`
+ya existía (lo usa la detección de reuso desde la Fase 4), pero ningún
+endpoint lo exponía para que un usuario terminara su propia sesión a
+voluntad — un refresh token vivía hasta su TTL natural (14 días) pasara lo
+que pasara. Ahora `POST /auth/logout` lo hace: revoca la familia completa
+(no solo el token que se mandó, toda la cadena de rotaciones de esa sesión),
+es idempotente a propósito (repetirlo, o mandar un token ajeno o
+inexistente, nunca es un error — así no revela si un token pertenece a
+otra cuenta), y compara `stored.user_id` contra el usuario autenticado para
+que nadie pueda cerrarle la sesión a otro pasando su refresh token en el
+cuerpo.
+
 ## Calidad y testing
 
 ### Metodología
@@ -465,7 +480,7 @@ test o la siguiente fase y darse cuenta de que algo no cuadraba.
 ### Cobertura
 
 ```
-TOTAL   1207 stmts   8 miss   126 branch   7 partial   99% cover
+TOTAL   1215 stmts   8 miss   128 branch   7 partial   99% cover
 ```
 
 Sin umbral mínimo en CI todavía (`pytest-cov` está configurado; el `--cov-fail-under`

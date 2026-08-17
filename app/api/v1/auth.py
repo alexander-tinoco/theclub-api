@@ -1,4 +1,4 @@
-"""POST /auth/register, /auth/login, /auth/refresh — GET /auth/me."""
+"""POST /auth/register, /auth/login, /auth/refresh, /auth/logout — GET /auth/me."""
 
 from datetime import datetime
 from typing import Literal
@@ -89,3 +89,8 @@ async def me(user: CurrentUserDep) -> UserResponse:
     return UserResponse(
         id=user.id, email=user.email, status=user.status, created_at=user.created_at
     )
+
+
+@router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
+async def logout(body: RefreshRequest, user: CurrentUserDep, session: SessionDep) -> None:
+    await auth_service.logout(session, user_id=user.id, raw_refresh_token=body.refresh_token)

@@ -260,3 +260,87 @@ async def test_login_tiene_rate_limit(client: AsyncClient) -> None:
     responses = [await client.post("/api/v1/auth/login", json=payload) for _ in range(6)]
 
     assert responses[-1].status_code == 429
+
+
+async def test_logout_revoca_el_refresh_token(client: AsyncClient) -> None:
+    register = await client.post("/api/v1/auth/register", json=_credentials())
+    tokens = register.json()
+    headers = {"Authorization": f"Bearer {tokens['access_token']}"}
+
+    logout = await client.post(
+        "/api/v1/auth/logout", json={"refresh_token": tokens["refresh_token"]}, headers=headers
+    )
+    assert logout.status_code == 204
+
+    refresh = await client.post(
+        "/api/v1/auth/refresh", json={"refresh_token": tokens["refresh_token"]}
+    )
+    assert refresh.status_code == 401
+
+
+async def test_logout_revoca_toda_la_familia_no_solo_el_token_actual(client: AsyncClient) -> None:
+    register = await client.post("/api/v1/auth/register", json=_credentials())
+    original = register.json()
+    headers = {"Authorization": f"Bearer {original['access_token']}"}
+
+    rotated = await client.post(
+        "/api/v1/auth/refresh", json={"refresh_token": original["refresh_token"]}
+    )
+    rotated_refresh = rotated.json()["refresh_token"]
+
+    logout = await client.post(
+        "/api/v1/auth/logout", json={"refresh_token": rotated_refresh}, headers=headers
+    )
+    assert logout.status_code == 204
+
+    refresh = await client.post("/api/v1/auth/refresh", json={"refresh_token": rotated_refresh})
+    assert refresh.status_code == 401
+
+
+async def test_logout_es_idempotente(client: AsyncClient) -> None:
+    register = await client.post("/api/v1/auth/register", json=_credentials())
+    tokens = register.json()
+    headers = {"Authorization": f"Bearer {tokens['access_token']}"}
+    body = {"refresh_token": tokens["refresh_token"]}
+
+    first = await client.post("/api/v1/auth/logout", json=body, headers=headers)
+    second = await client.post("/api/v1/auth/logout", json=body, headers=headers)
+
+    assert first.status_code == second.status_code == 204
+
+
+async def test_logout_con_token_desconocido_no_es_error(client: AsyncClient) -> None:
+    register = await client.post("/api/v1/auth/register", json=_credentials())
+    headers = {"Authorization": f"Bearer {register.json()['access_token']}"}
+
+    response = await client.post(
+        "/api/v1/auth/logout", json={"refresh_token": "esto-nunca-existio"}, headers=headers
+    )
+
+    assert response.status_code == 204
+
+
+async def test_logout_con_refresh_token_de_otro_usuario_no_lo_revoca(
+    client: AsyncClient,
+) -> None:
+    victim = await client.post("/api/v1/auth/register", json=_credentials())
+    victim_refresh = victim.json()["refresh_token"]
+
+    attacker = await client.post("/api/v1/auth/register", json=_credentials())
+    attacker_headers = {"Authorization": f"Bearer {attacker.json()['access_token']}"}
+
+    # El atacante está autenticado como sí mismo, pero manda el refresh token
+    # de la víctima en el cuerpo -- no debería poder cerrarle la sesión.
+    logout = await client.post(
+        "/api/v1/auth/logout", json={"refresh_token": victim_refresh}, headers=attacker_headers
+    )
+    assert logout.status_code == 204  # idempotente: no revela nada, no es un error
+
+    refresh = await client.post("/api/v1/auth/refresh", json={"refresh_token": victim_refresh})
+    assert refresh.status_code == 200  # el token de la víctima sigue vivo
+
+
+async def test_logout_requiere_access_token(client: AsyncClient) -> None:
+    response = await client.post("/api/v1/auth/logout", json={"refresh_token": "x"})
+
+    assert response.status_code == 401

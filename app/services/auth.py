@@ -123,6 +123,27 @@ async def refresh_access_token(
     )
 
 
+async def logout(session: AsyncSession, *, user_id: uuid.UUID, raw_refresh_token: str) -> None:
+    """Revoca la familia completa del refresh token — no solo esa fila, toda
+    la sesión que empezó con el login o refresh que la originó.
+
+    Idempotente a propósito: si el token no existe, ya caducó, o pertenece a
+    otro usuario, no es un error — el resultado que el cliente quiere
+    ("que esta sesión ya no sirva") ya se cumple igual. Comparar
+    `stored.user_id == user_id` evita además que alguien cierre la sesión de
+    otra cuenta pasando un refresh token ajeno en el cuerpo.
+    """
+    stored = await RefreshTokenRepository(session).get_by_hash(
+        hash_refresh_token(raw_refresh_token)
+    )
+    if stored is None or stored.user_id != user_id:
+        return
+
+    await RefreshTokenRepository(session).revoke_family(
+        stored.family_id, revoked_at=datetime.now(UTC)
+    )
+
+
 async def _issue_tokens(
     session: AsyncSession, settings: Settings, *, user_id: uuid.UUID, family_id: uuid.UUID
 ) -> TokenPair:
