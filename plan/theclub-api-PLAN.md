@@ -1,158 +1,158 @@
-# Plan de acción — theclub-api
+# Action plan — theclub-api
 
-## Contexto
+## Context
 
-The Club es una plataforma de casino construida como proyecto de portafolio, dividida en 3 repositorios que se conectan entre sí:
+The Club is a casino platform built as a portfolio project, split across 3 repositories that connect to each other:
 
-- **theclub-web**: la interfaz que juega el usuario.
-- **theclub-api** (este repo): el backend que calcula resultados de juego y publica eventos a Kafka.
-- **theclub-data**: el pipeline de datos (Kafka → S3 → Databricks) que convierte esos eventos en analítica de negocio.
+- **theclub-web**: the interface the user plays on.
+- **theclub-api** (this repo): the backend that computes game results and publishes events to Kafka.
+- **theclub-data**: the data pipeline (Kafka → S3 → Databricks) that turns those events into business analytics.
 
-`theclub-api` es el motor de juego: calcula resultados, gestiona balances y sesiones, y publica cada evento a Kafka para que `theclub-data` lo procese. Hoy el repositorio está **vacío** (sin commits), igual que `theclub-web` y `theclub-data`. Por lo tanto este repo no solo se construye a sí mismo: **define los contratos** (REST, WebSocket y esquema de eventos) de los que dependen los otros dos. Un cambio tardío en el esquema de eventos rompe el pipeline de datos, así que los contratos se congelan y versionan temprano.
+`theclub-api` is the game engine: it computes results, manages balances and sessions, and publishes every event to Kafka for `theclub-data` to process. Today the repository is **empty** (no commits), same as `theclub-web` and `theclub-data`. So this repo doesn't just build itself: it **defines the contracts** (REST, WebSocket, and event schema) that the other two depend on. A late change to the event schema breaks the data pipeline, so contracts are frozen and versioned early.
 
 ### Stack
 
 Python + FastAPI · PostgreSQL · SQLAlchemy 2.0 + Alembic · aiokafka · JWT · pytest · Docker + GitHub Actions.
 
-### Decisiones tomadas
+### Decisions made
 
-| Pregunta abierta | Decisión |
+| Open question | Decision |
 |---|---|
-| Kafka gestionado o local | **Redpanda en docker-compose** (API compatible con Kafka), con la config aislada para migrar a Confluent Cloud cambiando solo variables de entorno |
-| Un topic o varios | **Un topic por tipo de evento**, con nombres `theclub.<dominio>.<evento>.v1` |
-| REST o GraphQL | **REST + WebSocket** |
-| Hosting de la BD | **Postgres en Docker** para dev y tests; Neon cuando toque desplegar |
-| Juegos del MVP | **Solo ruleta europea**, hecha a fondo |
-| RNG | **Provably fair**: HMAC-SHA256 sobre `server_seed + client_seed + nonce`, con commit-reveal |
-| Deploy | **Sin deploy por ahora**; CI en GitHub Actions (lint, tipos, tests, build de imagen) |
-| Gestor de dependencias | **uv** (`uv.lock` versionado, `uv sync --frozen` en CI) |
-| Versión de Python | **3.14**, gestionada por uv en local y en la imagen Docker. Riesgo asumido: si alguna dependencia binaria no trae wheel para 3.14 (candidatas: `psycopg` en Fase 3, `aiokafka` en Fase 6), el arreglo es bajar a 3.13 en `.python-version` y el Dockerfile — no toca código |
+| Managed or local Kafka | **Redpanda in docker-compose** (Kafka-compatible API), with config isolated so migrating to Confluent Cloud only requires changing environment variables |
+| One topic or several | **One topic per event type**, named `theclub.<domain>.<event>.v1` |
+| REST or GraphQL | **REST + WebSocket** |
+| DB hosting | **Postgres in Docker** for dev and tests; Neon when it's time to deploy |
+| MVP games | **European roulette only**, done thoroughly |
+| RNG | **Provably fair**: HMAC-SHA256 over `server_seed + client_seed + nonce`, with commit-reveal |
+| Deploy | **No deploy for now**; CI on GitHub Actions (lint, types, tests, image build) |
+| Dependency manager | **uv** (`uv.lock` versioned, `uv sync --frozen` in CI) |
+| Python version | **3.14**, managed by uv locally and in the Docker image. Accepted risk: if some binary dependency doesn't ship a wheel for 3.14 (candidates: `psycopg` in Phase 3, `aiokafka` in Phase 6), the fix is dropping to 3.13 in `.python-version` and the Dockerfile — no code changes needed |
 
-### Fuera de alcance (explícito)
+### Out of scope (explicit)
 
-Tragamonedas, blackjack, dinero real o pasarela de pago, Avro + Schema Registry, despliegue en la nube, multi-instancia con Redis. Todo eso queda como fase posterior y el diseño deja el hueco preparado, pero no se construye ahora.
+Slot machines, blackjack, real money or a payment gateway, Avro + Schema Registry, cloud deployment, multi-instance with Redis. All of that is left for a later phase and the design leaves room for it, but it isn't built now.
 
 ---
 
-## Ciclo de trabajo (estilo swarm-forge, ejecutado por nosotros dos)
+## Workflow (swarm-forge style, run by the two of us)
 
-No hay multiagentes. Cada fase la recorremos secuencialmente y **tú pides un rol a la vez**. El valor está en no mezclar roles: cuando pides código no se discute diseño, y cuando pides revisión no se escribe funcionalidad nueva.
+No multi-agents. We work through each phase sequentially and **you request one role at a time**. The value is in not mixing roles: when you ask for code, design isn't discussed, and when you ask for review, no new functionality gets written.
 
-| Rol | Qué se pide | Qué entrega | Qué NO hace |
+| Role | What gets requested | What it delivers | What it does NOT do |
 |---|---|---|---|
-| **Arquitecto** | "Diseña la fase N" | Estructura de archivos, firmas de funciones, esquema de tablas o de eventos, decisiones y trade-offs | No escribe implementación |
-| **Implementador** | "Implementa X según el diseño" | Código de producción de un módulo acotado, siguiendo el diseño acordado | No inventa alcance ni escribe los tests |
-| **Tester** | "Escribe los tests de X" | Tests unitarios, de propiedades e integración, incluyendo casos límite y de fallo | No modifica el código de producción para que pasen |
-| **Revisor** | "Revisa la fase N" o `/code-review` | Bugs de corrección, condiciones de carrera, huecos de seguridad, simplificaciones | No aplica cambios sin que se le pida |
-| **Integrador** | "Cierra la fase N" | Migración Alembic, actualización de contratos/OpenAPI, README, commit limpio | No arranca la fase siguiente |
+| **Architect** | "Design phase N" | File structure, function signatures, table or event schema, decisions and trade-offs | Doesn't write implementation |
+| **Implementer** | "Implement X per the design" | Production code for a scoped module, following the agreed design | Doesn't invent scope or write tests |
+| **Tester** | "Write the tests for X" | Unit, property-based, and integration tests, including edge and failure cases | Doesn't modify production code to make them pass |
+| **Reviewer** | "Review phase N" or `/code-review` | Correctness bugs, race conditions, security gaps, simplifications | Doesn't apply changes unless asked |
+| **Integrator** | "Close phase N" | Alembic migration, contracts/OpenAPI update, README, clean commit | Doesn't start the next phase |
 
-**Regla de avance:** no se pasa a la fase siguiente hasta que la actual cumple su *Definition of Done* (cada fase trae la suya abajo). Si una fase revela que una decisión previa estaba mal, se actualiza este documento **antes** de seguir escribiendo código.
+**Progress rule:** don't move to the next phase until the current one meets its *Definition of Done* (each phase has its own, below). If a phase reveals that a previous decision was wrong, this document gets updated **before** continuing to write code.
 
-**Orden dentro de cada fase:** Arquitecto → Implementador → Tester → Revisor → Integrador. Para fases pequeñas se puede fusionar Implementador y Tester en una sola petición ("implementa X con sus tests"), pero Revisor siempre va aparte.
+**Order within each phase:** Architect → Implementer → Tester → Reviewer → Integrator. For small phases, Implementer and Tester can be merged into a single request ("implement X with its tests"), but Reviewer always stays separate.
 
 ---
 
-## Arquitectura
+## Architecture
 
-### Estructura de carpetas
+### Folder structure
 
 ```
 theclub-api/
 ├── app/
-│   ├── main.py                  # ensamblado FastAPI, lifespan, routers
-│   ├── config.py                # Settings con pydantic-settings (12-factor)
+│   ├── main.py                  # FastAPI assembly, lifespan, routers
+│   ├── config.py                # Settings via pydantic-settings (12-factor)
 │   ├── api/
-│   │   ├── deps.py              # inyección: sesión DB, usuario actual, idempotencia
-│   │   ├── errors.py            # excepciones de dominio → respuestas HTTP
+│   │   ├── deps.py              # injection: DB session, current user, idempotency
+│   │   ├── errors.py            # domain exceptions → HTTP responses
 │   │   └── v1/
 │   │       ├── auth.py          # /register, /login, /refresh, /me
 │   │       ├── wallet.py        # /balance, /transactions, /deposit
 │   │       ├── roulette.py      # /bets, /rounds, /fairness
-│   │       └── ws.py            # /ws — resultados y balance en vivo
-│   ├── domain/                  # NÚCLEO PURO: sin IO, sin SQLAlchemy, sin FastAPI
-│   │   ├── money.py             # tipo Money sobre enteros (unidades menores)
-│   │   ├── fairness.py          # commit-reveal, HMAC, muestreo sin sesgo
+│   │       └── ws.py            # /ws — live results and balance
+│   ├── domain/                  # PURE CORE: no IO, no SQLAlchemy, no FastAPI
+│   │   ├── money.py             # Money type over integers (minor units)
+│   │   ├── fairness.py          # commit-reveal, HMAC, unbiased sampling
 │   │   └── roulette/
-│   │       ├── table.py         # 37 casillas, tipos de apuesta, payouts
-│   │       ├── bets.py          # validación y resolución de apuestas
-│   │       └── engine.py        # spin(seed_material) -> Resultado
+│   │       ├── table.py         # 37 pockets, bet types, payouts
+│   │       ├── bets.py          # bet validation and resolution
+│   │       └── engine.py        # spin(seed_material) -> Outcome
 │   ├── models/                  # SQLAlchemy 2.0 (Mapped/mapped_column)
-│   ├── repositories/            # acceso a datos; sin lógica de negocio
-│   ├── services/                # casos de uso: place_bet, deposit, register…
+│   ├── repositories/            # data access; no business logic
+│   ├── services/                # use cases: place_bet, deposit, register…
 │   ├── events/
 │   │   ├── schemas.py           # envelope + payloads (Pydantic)
-│   │   ├── outbox.py            # escritura del outbox dentro de la transacción
-│   │   └── relay.py             # publicador outbox → Kafka
+│   │   ├── outbox.py            # writing to the outbox within the transaction
+│   │   └── relay.py             # outbox → Kafka publisher
 │   └── infra/
-│       ├── db.py                # engine async, sesión, unit of work
-│       ├── kafka.py             # productor (aiokafka), retry, cierre limpio
-│       └── security.py          # hashing argon2, emisión/validación JWT
-├── contracts/                   # ARTEFACTO COMPARTIDO con los otros dos repos
-│   ├── openapi.json             # generado, versionado en git
-│   └── events/*.schema.json     # JSON Schema por tipo de evento
+│       ├── db.py                # async engine, session, unit of work
+│       ├── kafka.py             # producer (aiokafka), retry, clean shutdown
+│       └── security.py          # argon2 hashing, JWT issuance/validation
+├── contracts/                   # SHARED ARTIFACT with the other two repos
+│   ├── openapi.json             # generated, versioned in git
+│   └── events/*.schema.json     # JSON Schema per event type
 ├── alembic/versions/
 ├── tests/{unit,integration,e2e}/
-├── plan/                        # este documento
-├── docker-compose.yml           # postgres + redpanda + consola
+├── plan/                        # this document
+├── docker-compose.yml           # postgres + redpanda + console
 ├── Dockerfile
 └── .github/workflows/ci.yml
 ```
 
-**Regla dura:** `app/domain/` no importa nada de `app/models`, `app/infra` ni FastAPI. Es matemática pura, testeable sin levantar nada. Esto es lo que permite simular millones de giros en un test para verificar el RTP.
+**Hard rule:** `app/domain/` doesn't import anything from `app/models`, `app/infra`, or FastAPI. It's pure math, testable without spinning anything up. This is what lets a test simulate millions of spins to verify RTP.
 
-### Modelo de datos
+### Data model
 
-Postgres. Dinero en **`BIGINT` de unidades menores (céntimos)** — nunca float, nunca `Numeric` con redondeo ambiguo. Todos los timestamps en `TIMESTAMPTZ` UTC.
+Postgres. Money in **`BIGINT` minor units (cents)** — never float, never `Numeric` with ambiguous rounding. All timestamps in `TIMESTAMPTZ` UTC.
 
-- **`users`** — `id` (UUID), `email` (único, citext), `password_hash` (argon2id), `status`, `created_at`.
-- **`wallets`** — `user_id` (único), `balance_minor` (BIGINT, `CHECK >= 0`), `currency`, `version` (bloqueo optimista).
-- **`ledger_entries`** — libro append-only, la fuente de verdad del dinero: `wallet_id`, `amount_minor` (con signo), `balance_after_minor`, `kind` (`deposit|bet_stake|bet_payout|adjustment`), `ref_type`, `ref_id`, `created_at`. El balance del wallet es una caché de la suma del ledger; un test de invariante lo comprueba.
-- **`seed_pairs`** — provably fair: `user_id`, `server_seed` (revelado solo al rotar), `server_seed_hash` (público), `client_seed`, `nonce` (contador), `status` (`active|revealed`), `revealed_at`.
-- **`rounds`** — una ronda de ruleta: `id`, `user_id`, `seed_pair_id`, `nonce`, `outcome` (0–36), `status`, `created_at`, `settled_at`.
+- **`users`** — `id` (UUID), `email` (unique, citext), `password_hash` (argon2id), `status`, `created_at`.
+- **`wallets`** — `user_id` (unique), `balance_minor` (BIGINT, `CHECK >= 0`), `currency`, `version` (optimistic lock).
+- **`ledger_entries`** — append-only ledger, the source of truth for money: `wallet_id`, `amount_minor` (signed), `balance_after_minor`, `kind` (`deposit|bet_stake|bet_payout|adjustment`), `ref_type`, `ref_id`, `created_at`. The wallet's balance is a cache of the ledger's sum; an invariant test verifies it.
+- **`seed_pairs`** — provably fair: `user_id`, `server_seed` (revealed only on rotation), `server_seed_hash` (public), `client_seed`, `nonce` (counter), `status` (`active|revealed`), `revealed_at`.
+- **`rounds`** — a roulette round: `id`, `user_id`, `seed_pair_id`, `nonce`, `outcome` (0–36), `status`, `created_at`, `settled_at`.
 - **`bets`** — `round_id`, `bet_type`, `selection` (JSONB), `stake_minor`, `payout_minor`, `status`.
-- **`idempotency_keys`** — `key`, `user_id`, `request_hash`, `response_body`, `status`, `expires_at`. Único por `(user_id, key)`.
-- **`outbox`** — `id`, `topic`, `key`, `payload` (JSONB), `headers`, `created_at`, `published_at`, `attempts`, `last_error`. Índice parcial sobre `published_at IS NULL`.
+- **`idempotency_keys`** — `key`, `user_id`, `request_hash`, `response_body`, `status`, `expires_at`. Unique per `(user_id, key)`.
+- **`outbox`** — `id`, `topic`, `key`, `payload` (JSONB), `headers`, `created_at`, `published_at`, `attempts`, `last_error`. Partial index on `published_at IS NULL`.
 
-### Los tres invariantes que sostienen todo
+### The three invariants everything rests on
 
-1. **El dinero nunca se pierde ni se duplica.** Cada movimiento es una entrada en `ledger_entries` dentro de la misma transacción que actualiza `wallets`. El débito usa `UPDATE wallets SET balance_minor = balance_minor - :stake WHERE id = :id AND balance_minor >= :stake RETURNING balance_minor` — atómico en una sentencia, sin lectura previa, así dos apuestas simultáneas no pueden sobregirar. Si afecta 0 filas → `InsufficientFunds`.
-2. **Un evento se publica si y solo si su transacción hizo commit.** Nada de escribir en Postgres y publicar en Kafka en paralelo (*dual write*): si Kafka falla después del commit, `theclub-data` pierde un evento para siempre. En su lugar, **patrón outbox**: el servicio inserta el evento en la tabla `outbox` en la *misma* transacción, y un relay en background lo publica y lo marca. Kafka caído = eventos acumulados, cero pérdida, se drenan al volver.
-3. **Un resultado es reproducible y verificable.** `outcome = f(server_seed, client_seed, nonce)`, determinista. Cualquiera puede recalcularlo con los datos que exponemos tras el reveal.
+1. **Money is never lost or duplicated.** Every movement is an entry in `ledger_entries` within the same transaction that updates `wallets`. The debit uses `UPDATE wallets SET balance_minor = balance_minor - :stake WHERE id = :id AND balance_minor >= :stake RETURNING balance_minor` — atomic in a single statement, no prior read, so two simultaneous bets can never overdraw. If it affects 0 rows → `InsufficientFunds`.
+2. **An event is published if and only if its transaction committed.** No writing to Postgres and publishing to Kafka in parallel (*dual write*): if Kafka fails after the commit, `theclub-data` loses an event forever. Instead, the **outbox pattern**: the service inserts the event into the `outbox` table in the *same* transaction, and a background relay publishes it and marks it. Kafka down = events pile up, zero loss, drained once it's back.
+3. **An outcome is reproducible and verifiable.** `outcome = f(server_seed, client_seed, nonce)`, deterministic. Anyone can recompute it with the data we expose after the reveal.
 
-### Provably fair — cómo funciona
+### Provably fair — how it works
 
-1. Al registrarse (o al rotar), se genera `server_seed` de 32 bytes con `secrets.token_bytes`. Se guarda, y se publica solo `sha256(server_seed)`.
-2. El cliente puede fijar su `client_seed`; si no, se le asigna uno.
-3. Cada giro consume `nonce` (incremental, único por par de semillas).
+1. On registration (or rotation), a 32-byte `server_seed` is generated with `secrets.token_bytes`. It's stored, and only `sha256(server_seed)` is published.
+2. The client can set their `client_seed`; if not, one is assigned.
+3. Each spin consumes a `nonce` (incremental, unique per seed pair).
 4. `digest = HMAC-SHA256(key=server_seed, msg=f"{client_seed}:{nonce}")`.
-5. Del digest se deriva un entero uniforme en 0–36 con **rejection sampling**: se toman 4 bytes, si el valor cae en el rango sesgado del módulo se avanza a los siguientes 4 bytes. Nunca `int(digest) % 37` a secas — introduce un sesgo medible que un test de uniformidad detecta.
-6. Al rotar semillas se revela el `server_seed` anterior; el jugador verifica que su hash coincide y recalcula sus giros.
+5. From the digest, a uniform integer in 0–36 is derived with **rejection sampling**: 4 bytes are taken, and if the value falls in the modulus's biased range, it advances to the next 4 bytes. Never plain `int(digest) % 37` — that introduces a measurable bias a uniformity test would catch.
+6. On seed rotation, the previous `server_seed` is revealed; the player verifies their hash matches and recomputes their spins.
 
-`GET /fairness/current` devuelve hash y client seed; `POST /fairness/rotate` revela el anterior y activa uno nuevo.
+`GET /fairness/current` returns the hash and client seed; `POST /fairness/rotate` reveals the previous one and activates a new one.
 
-### Ruleta europea
+### European roulette
 
-37 casillas (0–36), un solo cero. Payouts exactos, todos con **ventaja de casa de 2.70%** (RTP 97.30%):
+37 pockets (0–36), a single zero. Exact payouts, all with a **2.70% house edge** (97.30% RTP):
 
-| Apuesta | Cobertura | Paga | Apuesta | Cobertura | Paga |
+| Bet | Coverage | Pays | Bet | Coverage | Pays |
 |---|---|---|---|---|---|
-| Straight (pleno) | 1 | 35:1 | Dozen | 12 | 2:1 |
+| Straight | 1 | 35:1 | Dozen | 12 | 2:1 |
 | Split | 2 | 17:1 | Column | 12 | 2:1 |
 | Street | 3 | 11:1 | Red/Black | 18 | 1:1 |
 | Corner | 4 | 8:1 | Odd/Even | 18 | 1:1 |
 | Line | 6 | 5:1 | High/Low | 18 | 1:1 |
 
-El 0 no es rojo ni negro, ni par ni impar, ni alto ni bajo: pierde todas las apuestas externas (sin *la partage*, se documenta la elección). La tabla de rojos es un conjunto literal, no una fórmula. Una ronda admite varias apuestas: se validan todas, se suma el stake total, se debita una vez y se resuelve cada una.
+Zero is neither red nor black, neither odd nor even, neither high nor low: it loses every outside bet (no *la partage* — that choice is documented, not implicit). The red-numbers table is a literal set, not a formula. A round admits several bets: all are validated, the total stake is summed, debited once, and each is resolved.
 
-### Contrato de eventos hacia Kafka
+### Event contract toward Kafka
 
-Topics (uno por tipo, particionados por `user_id` para preservar el orden por usuario):
+Topics (one per type, partitioned by `user_id` to preserve per-user ordering):
 
 - `theclub.bets.placed.v1`
 - `theclub.rounds.settled.v1`
 - `theclub.wallet.transactions.v1`
 
-Envelope común en todos:
+Common envelope across all of them:
 
 ```json
 {
@@ -166,86 +166,86 @@ Envelope común en todos:
 }
 ```
 
-Reglas: `event_id` permite deduplicar aguas abajo; `occurred_at` es hora de negocio (no de publicación); montos siempre como enteros en unidades menores con su `currency`; nada de PII más allá del `user_id` (UUID) — sin emails en el stream. JSON para el MVP, pero los JSON Schema viven en `contracts/events/` y **el CI falla si el schema cambia sin subir la versión**. Ese es el hueco por donde entra Avro + Schema Registry más adelante sin drama.
+Rules: `event_id` allows downstream deduplication; `occurred_at` is business time (not publish time); amounts are always integers in minor units with their `currency`; no PII beyond `user_id` (UUID) — no emails in the stream. JSON for the MVP, but the JSON Schemas live in `contracts/events/` and **CI fails if a schema changes without a version bump**. That's the seam through which Avro + Schema Registry can come in later without drama.
 
 ---
 
-## Fases
+## Phases
 
-Cada fase termina con su *Definition of Done* cumplida y un commit.
+Each phase ends with its *Definition of Done* met and a commit.
 
-### Fase 0 — Fundación
-Estructura del repo, `pyproject.toml` (uv o poetry), `ruff` + `mypy` estricto, `docker-compose.yml` (Postgres + Redpanda + consola), `Dockerfile` multi-stage, `Settings` con pydantic-settings, `/health` y `/ready`, `.env.example`, `pytest` configurado.
-**DoD:** `docker compose up` levanta todo; `GET /health` responde 200; `pytest` corre (aunque sea con 1 test trivial).
+### Phase 0 — Foundation
+Repo structure, `pyproject.toml` (uv or poetry), strict `ruff` + `mypy`, `docker-compose.yml` (Postgres + Redpanda + console), multi-stage `Dockerfile`, `Settings` via pydantic-settings, `/health` and `/ready`, `.env.example`, `pytest` configured.
+**DoD:** `docker compose up` brings everything up; `GET /health` responds 200; `pytest` runs (even with just 1 trivial test).
 
-### Fase 1 — Contratos (antes que cualquier lógica)
-JSON Schema de los tres eventos en `contracts/events/`, modelos Pydantic del envelope, y borrador de los endpoints REST/WS documentado. Es lo primero porque `theclub-web` y `theclub-data` no pueden empezar sin esto.
-**DoD:** schemas validados con ejemplos; documento de contrato legible por los otros dos repos.
+### Phase 1 — Contracts (before any logic)
+JSON Schema for the three events in `contracts/events/`, Pydantic models for the envelope, and a documented draft of the REST/WS endpoints. This comes first because `theclub-web` and `theclub-data` can't start without it.
+**DoD:** schemas validated with examples; contract document readable by the other two repos.
 
-### Fase 2 — Dominio puro: fairness + ruleta
-`app/domain/` completo: `Money`, commit-reveal, HMAC, muestreo sin sesgo, tabla de ruleta, validación y resolución de apuestas. Cero IO.
-**DoD:** tests unitarios de payouts para los 13 tipos de apuesta; test de reproducibilidad (mismas semillas → mismo resultado); test de uniformidad sobre ≥1M de giros (chi-cuadrado); test de RTP que converge a 97.30% ± margen; property-based con `hypothesis` para que ningún payout sea negativo ni desborde.
+### Phase 2 — Pure domain: fairness + roulette
+Complete `app/domain/`: `Money`, commit-reveal, HMAC, unbiased sampling, roulette table, bet validation and resolution. Zero IO.
+**DoD:** unit tests of payouts for all 13 bet types; reproducibility test (same seeds → same result); uniformity test over ≥1M spins (chi-squared); RTP test converging to 97.30% ± margin; property-based tests with `hypothesis` so no payout is negative or overflows.
 
-### Fase 3 — Persistencia
-Modelos SQLAlchemy 2.0 async, migración inicial de Alembic, repositorios, unit of work.
-**DoD:** `alembic upgrade head` y `downgrade base` limpios; test de invariante ledger↔balance; test de concurrencia: N apuestas simultáneas sobre el mismo wallet nunca dejan el balance negativo.
+### Phase 3 — Persistence
+Async SQLAlchemy 2.0 models, initial Alembic migration, repositories, unit of work.
+**DoD:** clean `alembic upgrade head` and `downgrade base`; ledger↔balance invariant test; concurrency test: N simultaneous bets on the same wallet never leave the balance negative.
 
-### Fase 4 — Autenticación
-Registro/login con argon2id, JWT access (corto) + refresh (rotativo, con revocación), `get_current_user`, rate limiting en los endpoints de auth.
-**DoD:** tests de token expirado, firma inválida, refresh reusado (debe revocar la familia), email duplicado, y que el hash de contraseña jamás aparezca en una respuesta ni en un log.
+### Phase 4 — Authentication
+Register/login with argon2id, JWT access (short) + refresh (rotating, with revocation), `get_current_user`, rate limiting on auth endpoints.
+**DoD:** tests for expired token, invalid signature, reused refresh (must revoke the whole family), duplicate email, and that the password hash never appears in a response or a log.
 
-### Fase 5 — Caso de uso de apuesta (el corazón)
-`POST /rounds` con `Idempotency-Key` obligatorio: valida apuestas → debita atómicamente → deriva resultado → calcula payout → acredita → escribe en outbox → responde. Todo en una transacción. Más `/balance`, `/transactions`, `/rounds` (historial paginado por cursor), `/deposit` (simulado).
-**DoD:** tests de fondos insuficientes, stake ≤ 0, apuesta malformada, límites de mesa, reintento con la misma `Idempotency-Key` (misma respuesta, sin doble cobro), y misma clave con cuerpo distinto (409).
+### Phase 5 — The betting use case (the heart of it)
+`POST /rounds` with a mandatory `Idempotency-Key`: validates bets → debits atomically → derives the outcome → computes payout → credits → writes to outbox → responds. All in one transaction. Plus `/balance`, `/transactions`, `/rounds` (cursor-paginated history), `/deposit` (simulated).
+**DoD:** tests for insufficient funds, stake ≤ 0, malformed bet, table limits, retry with the same `Idempotency-Key` (same response, no double charge), and same key with a different body (409).
 
-### Fase 6 — Kafka
-Productor `aiokafka` con `acks=all`, `enable_idempotence`, reintentos y cierre limpio. Relay del outbox como tarea de background con backoff exponencial y bloqueo `FOR UPDATE SKIP LOCKED` (seguro con varias instancias).
-**DoD:** test de integración con Redpanda real: apuesta → los 3 eventos aparecen en sus topics con la forma del schema; test de Kafka caído → los eventos quedan en outbox y se drenan al restaurarlo, sin duplicar dinero.
+### Phase 6 — Kafka
+`aiokafka` producer with `acks=all`, `enable_idempotence`, retries, and clean shutdown. Outbox relay as a background task with exponential backoff and `FOR UPDATE SKIP LOCKED` locking (safe with multiple instances).
+**DoD:** integration test against real Redpanda: bet → all 3 events show up in their topics matching the schema shape; Kafka-down test → events stay in the outbox and drain once it's restored, without duplicating money.
 
-### Fase 7 — WebSocket
-`/ws` autenticado por token, con canal por usuario, heartbeat ping/pong, límite de conexiones y cierre ordenado. Emite `round.settled` y `balance.updated`.
-**DoD:** test e2e: cliente WS conectado recibe el resultado tras el POST; token inválido → cierre 4401; el broadcaster en memoria queda tras una interfaz para poder cambiarlo por Redis pub/sub sin tocar los handlers.
+### Phase 7 — WebSocket
+Token-authenticated `/ws`, with a per-user channel, ping/pong heartbeat, connection limit, and ordered shutdown. Emits `round.settled` and `balance.updated`.
+**DoD:** e2e test: a connected WS client receives the result after the POST; invalid token → 4401 close; the in-memory broadcaster sits behind an interface so it can be swapped for Redis pub/sub without touching the handlers.
 
-### Fase 8 — Endurecimiento y observabilidad
-Logging estructurado JSON con `request_id` y `user_id`, manejador global de excepciones que nunca filtra internals, CORS restringido, rate limiting global, límites de tamaño de payload, `/metrics` opcional. Revisión de seguridad completa.
-**DoD:** `/code-review` y `/security-review` sin hallazgos altos; ningún secreto en el repo; los logs no contienen semillas activas ni tokens.
+### Phase 8 — Hardening and observability
+Structured JSON logging with `request_id` and `user_id`, a global exception handler that never leaks internals, restricted CORS, global rate limiting, payload size limits, optional `/metrics`. Full security review.
+**DoD:** `/code-review` and `/security-review` with no high-severity findings; no secrets in the repo; logs contain no active seeds or tokens.
 
-### Fase 9 — CI
-GitHub Actions: ruff, mypy, pytest con cobertura sobre servicios de Postgres + Redpanda, build del Dockerfile, verificación de que `openapi.json` y los JSON Schema commiteados están al día, y `alembic check` contra deriva de modelos.
-**DoD:** CI en verde en un PR; README con arranque en menos de 5 minutos.
+### Phase 9 — CI
+GitHub Actions: ruff, mypy, pytest with coverage against Postgres + Redpanda services, Dockerfile build, verification that `openapi.json` and the committed JSON Schemas are up to date, and `alembic check` against model drift.
+**DoD:** green CI on a PR; README with a startup time under 5 minutes.
 
 ---
 
-## Escenarios de fallo que el diseño cubre
+## Failure scenarios the design covers
 
-| Escenario | Respuesta del diseño |
+| Scenario | Design response |
 |---|---|
-| Doble clic / reintento de red en una apuesta | `Idempotency-Key` obligatoria; se devuelve la respuesta original |
-| Dos apuestas concurrentes con saldo justo | `UPDATE … WHERE balance >= stake` atómico + `CHECK >= 0` en la tabla |
-| Kafka caído | Outbox acumula; el juego sigue funcionando; se drena al volver |
-| Crash entre commit y publicación | El relay recoge el outbox al reiniciar |
-| Consumidor de `theclub-data` que reprocesa | `event_id` permite deduplicar; los eventos son inmutables |
-| Cambio en el esquema de un evento | Topics versionados `.v1` + CI que exige subir versión |
-| Sesgo en el RNG | Rejection sampling + test de chi-cuadrado en CI |
-| Usuario acusa de manipulación | Commit-reveal: recalcula el resultado él mismo |
-| Refresh token robado | Rotación con detección de reuso → revoca toda la familia |
-| Deriva entre modelos y migraciones | `alembic check` en CI |
-| Varias instancias de la API | Relay con `SKIP LOCKED`; WS tras interfaz para Redis pub/sub |
+| Double click / network retry on a bet | Mandatory `Idempotency-Key`; the original response is returned |
+| Two concurrent bets with a tight balance | Atomic `UPDATE … WHERE balance >= stake` + `CHECK >= 0` on the table |
+| Kafka down | Outbox accumulates; the game keeps working; drains once it's back |
+| Crash between commit and publish | The relay picks up the outbox on restart |
+| A `theclub-data` consumer that reprocesses | `event_id` allows deduplication; events are immutable |
+| Change to an event's schema | Versioned `.v1` topics + CI that requires a version bump |
+| RNG bias | Rejection sampling + chi-squared test in CI |
+| User accuses the house of manipulation | Commit-reveal: they recompute the result themselves |
+| Stolen refresh token | Rotation with reuse detection → revokes the whole family |
+| Drift between models and migrations | `alembic check` in CI |
+| Multiple API instances | Relay with `SKIP LOCKED`; WS behind an interface for Redis pub/sub |
 
 ---
 
-## Verificación de punta a punta
+## End-to-end verification
 
-1. `docker compose up -d` → Postgres + Redpanda arriba.
-2. `alembic upgrade head` → esquema creado.
-3. `pytest -m "not integration"` → dominio puro, rápido, incluye RTP y uniformidad.
-4. `pytest -m integration` → BD y Kafka reales.
-5. Manual: registrar usuario → `GET /fairness/current` (anotar hash) → depositar → conectar al WS → apostar → ver resultado por HTTP y por WS → `POST /fairness/rotate` → recalcular el resultado a mano con el seed revelado y comprobar que coincide.
-6. Consola de Redpanda (`localhost:8090`) → los tres topics con sus mensajes.
-7. Reiniciar el contenedor de Redpanda a mitad de una tanda de apuestas → verificar que ningún evento se pierde y que ningún balance queda mal.
+1. `docker compose up -d` → Postgres + Redpanda up.
+2. `alembic upgrade head` → schema created.
+3. `pytest -m "not integration"` → pure domain, fast, includes RTP and uniformity.
+4. `pytest -m integration` → real DB and Kafka.
+5. Manual: register a user → `GET /fairness/current` (note the hash) → deposit → connect to the WS → place a bet → see the result over HTTP and over WS → `POST /fairness/rotate` → recompute the result by hand with the revealed seed and check it matches.
+6. Redpanda console (`localhost:8090`) → the three topics with their messages.
+7. Restart the Redpanda container mid-way through a batch of bets → verify no event is lost and no balance ends up wrong.
 
 ---
 
-## Primer paso
+## First step
 
-Fase 0, rol **Arquitecto**: proponer la estructura concreta de archivos y el `docker-compose.yml` antes de escribir código.
+Phase 0, **Architect** role: propose the concrete file structure and `docker-compose.yml` before writing any code.

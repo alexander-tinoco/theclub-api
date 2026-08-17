@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "round-settled.v1.schema.json",
   "title": "RoundSettledEvent",
-  "description": "theclub.rounds.settled.v1 — se publica cuando se resuelve una ronda: el resultado y cómo pagó cada apuesta.",
+  "description": "theclub.rounds.settled.v1 — published when a round is resolved: the outcome and how each bet paid out.",
   "allOf": [{ "$ref": "envelope.v1.schema.json" }],
   "properties": {
     "event_type": { "const": "round.settled" },

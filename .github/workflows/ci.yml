@@ -30,8 +30,8 @@ jobs:
       - run: uv sync --locked
       - run: make typecheck
 
-  # Contrato versionado en contracts/openapi.json (scripts/export_openapi.py):
-  # sin DB ni Kafka -- app.openapi() solo introspecciona rutas, no toca IO.
+  # Contract versioned in contracts/openapi.json (scripts/export_openapi.py):
+  # no DB or Kafka needed -- app.openapi() only introspects routes, no IO.
   contracts:
     runs-on: ubuntu-latest
     steps:
@@ -60,8 +60,8 @@ jobs:
     env:
       APP_ENV: test
       DATABASE_URL: postgresql+psycopg://theclub:theclub@localhost:5432/theclub
-      # Sin .env en el checkout, docker-compose.yml usa su default
-      # (REDIS_PORT=6389) -- no el 6379 nativo del contenedor.
+      # No .env in the checkout, so docker-compose.yml uses its default
+      # (REDIS_PORT=6389) -- not the container's native 6379.
       REDIS_URL: redis://localhost:6389/0
       KAFKA_BOOTSTRAP_SERVERS: localhost:19092
     steps:
@@ -71,19 +71,19 @@ jobs:
           enable-cache: true
       - run: uv sync --locked
 
-      # El mismo docker-compose.yml que en local, no un `docker run` aparte:
-      # tests/integration/test_kafka_outage.py controla Redpanda con
-      # `docker compose stop/start redpanda` -- necesita que sea *ese*
-      # comando el que lo haya levantado, o no encuentra el contenedor.
-      # `--wait` bloquea hasta que los tres healthchecks pasan, igual que
-      # hace `depends_on: condition: service_healthy` para `api` en local.
-      - name: Levantar Postgres, Redis y Redpanda
+      # The same docker-compose.yml as local, not a separate `docker run`:
+      # tests/integration/test_kafka_outage.py controls Redpanda with
+      # `docker compose stop/start redpanda` -- it needs to be *that*
+      # command that brought it up, or it can't find the container.
+      # `--wait` blocks until all three healthchecks pass, same as
+      # `depends_on: condition: service_healthy` does for `api` locally.
+      - name: Bring up Postgres, Redis, and Redpanda
         run: docker compose up -d postgres redis redpanda --wait
 
-      - name: Migrar la base de datos
+      - name: Migrate the database
         run: make db-upgrade
-      - name: alembic check (deriva entre modelos y migraciones)
+      - name: alembic check (drift between models and migrations)
         run: make db-check
 
-      - name: Tests con cobertura
+      - name: Tests with coverage
         run: make test-cov

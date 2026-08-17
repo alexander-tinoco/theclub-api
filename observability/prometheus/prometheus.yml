@@ -1,6 +1,6 @@
-# Scrapea /metrics de la API dentro de la red de docker-compose. El nombre
-# de servicio (`api`) resuelve solo ahí -- por eso este archivo no sirve
-# para apuntar Prometheus a la API desde fuera de compose.
+# Scrapes the API's /metrics inside the docker-compose network. The service
+# name (`api`) only resolves there -- that's why this file doesn't work for
+# pointing Prometheus at the API from outside compose.
 global:
   scrape_interval: 15s
   evaluation_interval: 15s

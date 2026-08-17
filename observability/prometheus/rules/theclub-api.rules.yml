@@ -1,8 +1,7 @@
-# Todas sobre métricas que ya expone /metrics (app/infra/metrics.py) --
-# ninguna alerta aquí depende de algo que no se pueda ver hoy mismo en el
-# dashboard de Grafana. La única pendiente a propósito -- backlog del
-# outbox -- necesita una métrica que todavía no existe; se añade en una
-# fase aparte, no aquí.
+# All on metrics that /metrics already exposes (app/infra/metrics.py) --
+# no alert here depends on something that isn't already visible on the
+# Grafana dashboard today. The one deliberately missing -- outbox backlog --
+# needs a metric that doesn't exist yet; it's added in a separate phase, not here.
 groups:
   - name: theclub-api
     rules:
@@ -12,8 +11,8 @@ groups:
         labels:
           severity: critical
         annotations:
-          summary: "theclub-api no responde a Prometheus"
-          description: "El target theclub-api lleva más de 1m sin poder scrapearse."
+          summary: "theclub-api isn't responding to Prometheus"
+          description: "The theclub-api target has been unscrapable for more than 1m."
 
       - alert: HighErrorRate
         expr: |
@@ -25,8 +24,8 @@ groups:
         labels:
           severity: warning
         annotations:
-          summary: "Tasa de errores 5xx por encima del 5%"
-          description: "Más del 5% de las peticiones de los últimos 5m terminaron en 5xx."
+          summary: "5xx error rate above 5%"
+          description: "More than 5% of requests over the last 5m ended in a 5xx."
 
       - alert: HighLatencyP95
         expr: |
@@ -38,8 +37,8 @@ groups:
         labels:
           severity: warning
         annotations:
-          summary: "Latencia p95 por encima de 1s"
-          description: "El percentil 95 de duración de petición lleva 5m por encima de 1s."
+          summary: "p95 latency above 1s"
+          description: "The 95th percentile of request duration has been above 1s for 5m."
 
       - alert: WsConnectionsNearLimit
         expr: ws_connections_active / ws_connections_limit > 0.9
@@ -47,5 +46,5 @@ groups:
         labels:
           severity: warning
         annotations:
-          summary: "Conexiones WebSocket cerca del límite configurado"
-          description: "ws_connections_active superó el 90% de WS_MAX_CONNECTIONS durante 2m."
+          summary: "WebSocket connections near the configured limit"
+          description: "ws_connections_active exceeded 90% of WS_MAX_CONNECTIONS for 2m."

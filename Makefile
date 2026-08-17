@@ -2,67 +2,67 @@
 .PHONY: help install dev up down reset logs ps test test-unit test-cov lint fmt typecheck check \
 	db-upgrade db-downgrade db-revision db-check openapi openapi-check
 
-help: ## Muestra esta ayuda
+help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
 
-install: ## Crea el entorno con uv
+install: ## Create the environment with uv
 	uv sync
 
-dev: ## Arranca la API en local con recarga automática
+dev: ## Run the API locally with hot reload
 	uv run uvicorn app.main:app --reload --port 8000
 
-up: ## Levanta todo: postgres, redpanda, console, redis, api y el stack de observabilidad
+up: ## Bring up everything: postgres, redpanda, console, redis, api, and the observability stack
 	docker compose up -d --build
 
-down: ## Para los servicios (conserva los datos)
+down: ## Stop the services (keeps the data)
 	docker compose down
 
-reset: ## Para los servicios y BORRA los volúmenes de datos
+reset: ## Stop the services and DELETE the data volumes
 	docker compose down -v
 
-logs: ## Sigue los logs de todos los servicios
+logs: ## Follow the logs of every service
 	docker compose logs -f
 
-ps: ## Estado de los servicios
+ps: ## Service status
 	docker compose ps
 
-test: ## Todos los tests
+test: ## All tests
 	uv run pytest
 
-test-unit: ## Solo los tests que no necesitan servicios levantados
+test-unit: ## Only the tests that don't need services running
 	uv run pytest -m "not integration and not e2e"
 
-test-cov: ## Todos los tests con reporte de cobertura (falla por debajo del umbral de pyproject.toml)
+test-cov: ## All tests with a coverage report (fails below the threshold in pyproject.toml)
 	uv run pytest --cov
 
-lint: ## Lint sin modificar archivos
+lint: ## Lint without modifying files
 	uv run ruff check .
 	uv run ruff format --check .
 
-fmt: ## Formatea y arregla lo que se pueda automáticamente
+fmt: ## Format and auto-fix what can be auto-fixed
 	uv run ruff check --fix .
 	uv run ruff format .
 
-typecheck: ## Comprobación estática de tipos
+typecheck: ## Static type checking
 	uv run mypy
 
-check: lint typecheck openapi-check db-check test-cov ## Todo lo que exige el CI
+check: lint typecheck openapi-check db-check test-cov ## Everything CI requires
 
-db-upgrade: ## Aplica las migraciones pendientes
+db-upgrade: ## Apply pending migrations
 	uv run alembic upgrade head
 
-db-downgrade: ## Revierte la última migración
+db-downgrade: ## Revert the last migration
 	uv run alembic downgrade -1
 
-db-revision: ## Autogenera una migración a partir de los modelos (uso: make db-revision m="mensaje")
+db-revision: ## Autogenerate a migration from the models (usage: make db-revision m="message")
 	uv run alembic revision --autogenerate -m "$(m)"
 
-db-check: ## Falla si los modelos y las migraciones commiteadas divergieron
+db-check: ## Fail if the models and the committed migrations have drifted apart
 	uv run alembic check
 
-openapi: ## Regenera contracts/openapi.json a partir del código actual
+openapi: ## Regenerate contracts/openapi.json from the current code
 	uv run python scripts/export_openapi.py
 
-openapi-check: ## Falla si contracts/openapi.json no coincide con el código actual
+openapi-check: ## Fail if contracts/openapi.json doesn't match the current code
 	uv run python scripts/export_openapi.py
 	git diff --exit-code contracts/openapi.json

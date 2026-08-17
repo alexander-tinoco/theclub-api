@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "wallet-transaction.v1.schema.json",
   "title": "WalletTransactionEvent",
-  "description": "theclub.wallet.transactions.v1 — un evento por cada fila del ledger: depósito, stake de apuesta, payout de apuesta o ajuste.",
+  "description": "theclub.wallet.transactions.v1 — one event per ledger row: deposit, bet stake, bet payout, or adjustment.",
   "allOf": [{ "$ref": "envelope.v1.schema.json" }],
   "properties": {
     "event_type": { "const": "wallet.transaction" },

@@ -10,7 +10,7 @@
   "panels": [
     {
       "id": 1,
-      "title": "Peticiones HTTP por ruta",
+      "title": "HTTP requests by route",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
@@ -26,7 +26,7 @@
     },
     {
       "id": 2,
-      "title": "Tasa de errores 5xx",
+      "title": "5xx error rate",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
@@ -42,7 +42,7 @@
     },
     {
       "id": 3,
-      "title": "Latencia p95 por ruta",
+      "title": "p95 latency by route",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
@@ -58,7 +58,7 @@
     },
     {
       "id": 4,
-      "title": "Conexiones WS activas",
+      "title": "Active WS connections",
       "type": "stat",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "gridPos": { "h": 8, "w": 6, "x": 12, "y": 8 },
@@ -67,14 +67,14 @@
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
           "expr": "ws_connections_active",
-          "legendFormat": "activas",
+          "legendFormat": "active",
           "refId": "A"
         }
       ]
     },
     {
       "id": 5,
-      "title": "Conexiones WS aceptadas",
+      "title": "Accepted WS connections",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "gridPos": { "h": 8, "w": 6, "x": 18, "y": 8 },
@@ -83,14 +83,14 @@
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
           "expr": "rate(ws_connections_total[5m])",
-          "legendFormat": "aceptadas/s",
+          "legendFormat": "accepted/s",
           "refId": "A"
         }
       ]
     },
     {
       "id": 6,
-      "title": "Rondas resueltas (ganadas vs. perdidas)",
+      "title": "Rounds resolved (won vs. lost)",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
@@ -106,7 +106,7 @@
     },
     {
       "id": 7,
-      "title": "Logs de theclub-api",
+      "title": "theclub-api logs",
       "type": "logs",
       "datasource": { "type": "loki", "uid": "loki" },
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },

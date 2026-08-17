@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "envelope.v1.schema.json",
   "title": "EventEnvelope",
-  "description": "Sobre común a los eventos que theclub-api publica en Kafka. Los tres schemas de evento (bet-placed, round-settled, wallet-transaction) lo extienden vía allOf y sobrescriben `data` con su payload específico.",
+  "description": "Common envelope for the events theclub-api publishes to Kafka. The three event schemas (bet-placed, round-settled, wallet-transaction) extend it via allOf and override `data` with their specific payload.",
   "type": "object",
   "required": [
     "event_id",
@@ -17,7 +17,7 @@
     "event_id": {
       "type": "string",
       "format": "uuid",
-      "description": "Generado una única vez al insertar la fila en outbox; estable entre reintentos. Es la clave de deduplicación para el consumidor."
+      "description": "Generated exactly once when the outbox row is inserted; stable across retries. It's the deduplication key for the consumer."
     },
     "event_type": {
       "type": "string",
@@ -30,7 +30,7 @@
     "occurred_at": {
       "type": "string",
       "format": "date-time",
-      "description": "Hora de negocio (cuándo ocurrió), no de publicación en Kafka."
+      "description": "Business time (when it happened), not Kafka publish time."
     },
     "producer": {
       "type": "string",
@@ -38,11 +38,11 @@
     },
     "idempotency_key": {
       "type": ["string", "null"],
-      "description": "El Idempotency-Key HTTP de la petición que originó el evento. null si el evento no nace de una petición del usuario."
+      "description": "The HTTP Idempotency-Key of the request that originated the event. null if the event doesn't come from a user request."
     },
     "data": {
       "type": "object",
-      "description": "Payload específico del event_type. Ver el schema de cada evento."
+      "description": "Payload specific to the event_type. See each event's schema."
     }
   },
   "additionalProperties": false

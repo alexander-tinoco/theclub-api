@@ -26,10 +26,10 @@ services:
       - --mode=dev-container
       - --smp=1
       - --default-log-level=warn
-      # Dos listeners a propósito: `internal` es el que usan los otros
-      # contenedores por nombre de servicio, `external` el que usas tú desde el
-      # host. Anunciar solo uno es el fallo clásico de Kafka en Docker: o no
-      # conecta la API, o no conectan los tests.
+      # Two listeners on purpose: `internal` is what other containers use by
+      # service name, `external` is what you use from the host. Advertising
+      # only one is the classic Kafka-in-Docker failure: either the API can't
+      # connect, or the tests can't.
       - --kafka-addr=internal://0.0.0.0:9092,external://0.0.0.0:19092
       - --advertise-kafka-addr=internal://redpanda:9092,external://localhost:19092
     ports:
@@ -75,7 +75,7 @@ services:
         required: false
     environment:
       APP_ENV: local
-      # Dentro de la red de compose se usan los nombres de servicio, no localhost.
+      # Inside the compose network, service names are used, not localhost.
       DATABASE_URL: postgresql+psycopg://theclub:theclub@postgres:5432/theclub
       KAFKA_BOOTSTRAP_SERVERS: redpanda:9092
       REDIS_URL: redis://redis:6379/0
@@ -123,8 +123,8 @@ services:
     command: -config.file=/etc/promtail/promtail-config.yml
     volumes:
       - ./observability/promtail/promtail-config.yml:/etc/promtail/promtail-config.yml:ro
-      # Solo lectura: promtail lee metadatos y logs de contenedores, no
-      # necesita poder arrancarlos ni pararlos.
+      # Read-only: promtail reads container metadata and logs, it doesn't
+      # need to be able to start or stop them.
       - /var/run/docker.sock:/var/run/docker.sock:ro
     depends_on:
       - loki
@@ -132,8 +132,8 @@ services:
   grafana:
     image: grafana/grafana:11.3.1
     environment:
-      # Sin auth para entrar solo con abrir el navegador en local -- no es
-      # el default de la imagen, que pide login incluso en dev.
+      # No auth so a browser tab is all you need locally -- not the image's
+      # default, which asks for login even in dev.
       GF_AUTH_ANONYMOUS_ENABLED: "true"
       GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
       GF_AUTH_DISABLE_LOGIN_FORM: "true"

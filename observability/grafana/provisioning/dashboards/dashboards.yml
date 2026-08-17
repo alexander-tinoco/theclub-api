@@ -1,6 +1,6 @@
-# Le dice a Grafana dónde buscar los JSON de dashboards versionados en el
-# repo (ver ../../dashboards/) -- así el dashboard existe desde el primer
-# arranque, sin construirlo a mano en la UI.
+# Tells Grafana where to look for the dashboard JSON files versioned in the
+# repo (see ../../dashboards/) -- so the dashboard exists from the very
+# first startup, without building it by hand in the UI.
 apiVersion: 1
 
 providers:

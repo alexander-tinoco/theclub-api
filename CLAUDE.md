@@ -1,61 +1,61 @@
-# theclub-api — guía de trabajo con Claude Code
+# theclub-api — Claude Code working guide
 
-## Qué es este repo
+## What this repo is
 
-Motor de juego de The Club (portafolio): resuelve rondas de ruleta, gestiona balances
-y publica eventos a Kafka. El plan completo, con contexto, decisiones y fases, vive en
-[`plan/theclub-api-PLAN.md`](plan/theclub-api-PLAN.md) — léelo antes de tocar nada si
-hace falta contexto de por qué existe una pieza.
+The Club's game engine (portfolio project): resolves roulette rounds, manages balances,
+and publishes events to Kafka. The full plan, with context, decisions, and phases, lives in
+[`plan/theclub-api-PLAN.md`](plan/theclub-api-PLAN.md) — read it before touching anything if
+you need context on why a piece exists.
 
-## Ciclo de trabajo por roles (sin multiagentes)
+## Role-based workflow (no multi-agents)
 
-Cada fase del plan se recorre pidiendo un rol a la vez. No mezclar roles dentro de una
-misma petición salvo que el usuario lo pida explícitamente:
+Each phase of the plan is worked through by requesting one role at a time. Don't mix roles
+within the same request unless the user explicitly asks for it:
 
-| Rol | Se pide con | Entrega | No hace |
+| Role | Requested with | Delivers | Doesn't do |
 |---|---|---|---|
-| **Arquitecto** | "Diseña la fase N" | Estructura de archivos, firmas, esquema de tablas/eventos, decisiones y trade-offs | No escribe implementación |
-| **Implementador** | "Implementa X" | Código de producción de un módulo acotado | No inventa alcance, no escribe tests salvo que se fusione con Tester |
-| **Tester** | "Escribe los tests de X" | Unitarios, de propiedades, integración; casos límite y de fallo | No modifica producción para que los tests pasen |
-| **Revisor** | "Revisa la fase N" o `/code-review` | Bugs, condiciones de carrera, huecos de seguridad, simplificaciones | No aplica cambios sin que se le pida |
-| **Integrador** | "Cierra la fase N" | Migración Alembic, contratos/OpenAPI, README, commit | No arranca la fase siguiente |
+| **Architect** | "Design phase N" | File structure, signatures, table/event schema, decisions and trade-offs | Doesn't write implementation |
+| **Implementer** | "Implement X" | Production code for a scoped module | Doesn't invent scope, doesn't write tests unless merged with Tester |
+| **Tester** | "Write the tests for X" | Unit, property-based, integration; edge and failure cases | Doesn't modify production code to make tests pass |
+| **Reviewer** | "Review phase N" or `/code-review` | Bugs, race conditions, security gaps, simplifications | Doesn't apply changes unless asked |
+| **Integrator** | "Close phase N" | Alembic migration, contracts/OpenAPI, README, commit | Doesn't start the next phase |
 
-Orden dentro de una fase: Arquitecto → Implementador → Tester → Revisor → Integrador.
-No se avanza de fase hasta cumplir su *Definition of Done* (definida en el plan). Si algo
-revela que una decisión previa estaba mal, se actualiza `plan/theclub-api-PLAN.md`
-**antes** de seguir escribiendo código.
+Order within a phase: Architect → Implementer → Tester → Reviewer → Integrator.
+Don't move to the next phase until the current one meets its *Definition of Done* (defined
+in the plan). If something reveals that a previous decision was wrong, update
+`plan/theclub-api-PLAN.md` **before** continuing to write code.
 
-## Reglas de commits
+## Commit rules
 
-- **Nunca** añadir co-autoría de Claude ni el trailer `Co-Authored-By` — los commits van
-  a nombre del usuario únicamente.
-- **Nunca** commitear sin que el usuario lo pida explícitamente.
-- Después de cada commit, explicar en el chat, en prosa (no solo el diff):
-  - **Qué** archivos se tocaron y **qué representa** cada uno.
-  - **Por qué** existen esas piezas — la motivación o el problema que resuelven.
-  - **Cómo funcionan** — el mecanismo, no solo una paráfrasis del nombre de la función.
-  - Esta explicación es obligatoria incluso si el commit parece pequeño.
+- **Never** add Claude co-authorship or the `Co-Authored-By` trailer — commits go
+  under the user's name only.
+- **Never** commit without the user explicitly asking for it.
+- After every commit, explain in the chat, in prose (not just the diff):
+  - **What** files were touched and **what each one represents**.
+  - **Why** those pieces exist — the motivation or problem they solve.
+  - **How** they work — the mechanism, not just a paraphrase of the function name.
+  - This explanation is mandatory even if the commit looks small.
 
-## Convenciones del proyecto
+## Project conventions
 
-- Dinero: siempre `BIGINT` en unidades menores (céntimos), nunca `float`.
-- `app/domain/` es núcleo puro: sin IO, sin SQLAlchemy, sin FastAPI. Si un archivo ahí
-  necesita importar de `app/models` o `app/infra`, está en el paquete equivocado.
-- Eventos a Kafka vía patrón outbox — nunca dual-write (escribir en Postgres y publicar
-  en Kafka como pasos separados sin transacción compartida).
-- Topics versionados `.v1`; cambiar un schema de evento exige subir versión.
-- `/health` = liveness, sin tocar dependencias. `/ready` = readiness, corre checks
-  registrados en `app.state.readiness` (ver `app/api/health.py`).
+- Money: always `BIGINT` in minor units (cents), never `float`.
+- `app/domain/` is pure core: no IO, no SQLAlchemy, no FastAPI. If a file there
+  needs to import from `app/models` or `app/infra`, it's in the wrong package.
+- Events to Kafka go through the outbox pattern — never dual-write (writing to Postgres
+  and publishing to Kafka as separate steps without a shared transaction).
+- Versioned topics `.v1`; changing an event schema requires bumping the version.
+- `/health` = liveness, doesn't touch dependencies. `/ready` = readiness, runs checks
+  registered in `app.state.readiness` (see `app/api/health.py`).
 
-## Comandos
+## Commands
 
 ```bash
-make up          # levanta postgres + redpanda + console + api
-make dev          # api local con recarga, sin rebuild de imagen
-make test         # todos los tests
-make test-unit    # solo los que no requieren servicios levantados
-make check         # lint + typecheck + test (lo que exige CI)
+make up          # brings up postgres + redpanda + console + api
+make dev          # local api with reload, no image rebuild
+make test         # all tests
+make test-unit    # only the ones that don't require services running
+make check         # lint + typecheck + test (what CI requires)
 ```
 
-Puertos por defecto (parametrizables en `.env` para no chocar con otros proyectos
-locales): API `8010`, consola de Redpanda `8090`, Postgres `5432`, Kafka `19092`.
+Default ports (parametrized in `.env` to avoid clashing with other local
+projects): API `8010`, Redpanda console `8090`, Postgres `5432`, Kafka `19092`.

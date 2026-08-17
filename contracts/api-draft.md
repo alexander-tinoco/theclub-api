@@ -1,41 +1,41 @@
-# Borrador de API — REST + WebSocket
+# API draft — REST + WebSocket
 
-Borrador de referencia para que `theclub-web` empiece a maquetar contra algo estable. No
-es un OpenAPI generado — eso llega cuando existan los endpoints de verdad (Fases 4, 5 y
-7), momento en el que este archivo deja de ser la fuente de la verdad y pasa a serlo
-`openapi.json` (generado desde la app, verificado en CI en la Fase 9).
+Reference draft so `theclub-web` can start building against something stable. It's not a
+generated OpenAPI — that arrives once the real endpoints exist (Phases 4, 5, and 7), at
+which point this file stops being the source of truth and `openapi.json` (generated from
+the app, verified in CI in Phase 9) takes over.
 
-Prefijo común: `/api/v1`. Autenticación: `Authorization: Bearer <access_token>` salvo
-donde se indique lo contrario.
+Common prefix: `/api/v1`. Auth: `Authorization: Bearer <access_token>` unless stated
+otherwise.
 
-## Auth (Fase 4)
+## Auth (Phase 4)
 
-| Verbo | Ruta | Auth | Qué hace |
+| Verb | Path | Auth | What it does |
 |---|---|---|---|
-| POST | `/auth/register` | no | Crea usuario + wallet en cero |
-| POST | `/auth/login` | no | Devuelve access + refresh token |
-| POST | `/auth/refresh` | no (refresh token en body) | Rota el refresh token; revoca toda la familia si se reusa uno viejo |
-| GET | `/auth/me` | sí | Datos del usuario autenticado |
+| POST | `/auth/register` | no | Creates a user + wallet at zero |
+| POST | `/auth/login` | no | Returns an access + refresh token |
+| POST | `/auth/refresh` | no (refresh token in body) | Rotates the refresh token; revokes the whole family if an old one is reused |
+| GET | `/auth/me` | yes | Authenticated user's data |
 
-## Wallet (Fase 5)
+## Wallet (Phase 5)
 
-| Verbo | Ruta | Auth | Qué hace |
+| Verb | Path | Auth | What it does |
 |---|---|---|---|
-| GET | `/wallet/balance` | sí | Balance actual, en céntimos |
-| GET | `/wallet/transactions` | sí | Historial del ledger, paginado por cursor |
-| POST | `/wallet/deposit` | sí | Depósito simulado (sin pasarela real) |
+| GET | `/wallet/balance` | yes | Current balance, in cents |
+| GET | `/wallet/transactions` | yes | Ledger history, cursor-paginated |
+| POST | `/wallet/deposit` | yes | Simulated deposit (no real gateway) |
 
-## Ruleta (Fase 5)
+## Roulette (Phase 5)
 
-| Verbo | Ruta | Auth | Qué hace |
+| Verb | Path | Auth | What it does |
 |---|---|---|---|
-| GET | `/roulette/fairness/current` | sí | Hash del server seed activo + client seed |
-| POST | `/roulette/fairness/rotate` | sí | Revela el seed anterior, activa uno nuevo |
-| POST | `/roulette/rounds` | sí, + `Idempotency-Key` obligatorio | Coloca una o más apuestas, resuelve la ronda y devuelve el resultado |
-| GET | `/roulette/rounds` | sí | Historial de rondas, paginado por cursor |
+| GET | `/roulette/fairness/current` | yes | Hash of the active server seed + client seed |
+| POST | `/roulette/fairness/rotate` | yes | Reveals the previous seed, activates a new one |
+| POST | `/roulette/rounds` | yes, + mandatory `Idempotency-Key` | Places one or more bets, resolves the round, and returns the result |
+| GET | `/roulette/rounds` | yes | Round history, cursor-paginated |
 
-## WebSocket (Fase 7)
+## WebSocket (Phase 7)
 
-| Ruta | Auth | Qué emite |
+| Path | Auth | What it emits |
 |---|---|---|
-| `/ws` | token en query string o subprotocolo | `round.settled`, `balance.updated` — la misma forma de `data` que sus eventos de Kafka homónimos |
+| `/ws` | token in query string or subprotocol | `round.settled`, `balance.updated` — the same `data` shape as their Kafka counterparts |

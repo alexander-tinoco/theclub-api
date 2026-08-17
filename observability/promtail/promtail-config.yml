@@ -1,6 +1,6 @@
-# Descubre contenedores vía el socket de Docker (montado read-only en el
-# servicio `promtail` de docker-compose) en vez de listar servicios a mano
-# -- un contenedor nuevo se recoge solo, sin tocar este archivo.
+# Discovers containers via the Docker socket (mounted read-only in the
+# `promtail` service of docker-compose) instead of listing services by hand
+# -- a new container gets picked up on its own, without touching this file.
 server:
   http_listen_port: 9080
   grpc_listen_port: 0
@@ -20,10 +20,11 @@ scrape_configs:
       - source_labels: ["__meta_docker_container_name"]
         regex: "/(.*)"
         target_label: "container"
-    # `configure_logging` (app/infra/logging.py) emite una línea JSON por
-    # evento -- de ahí sale la etiqueta `level`, sin tocar la app para nada.
-    # Si una línea no es JSON válido (otro contenedor, un traceback multilínea),
-    # esta etapa simplemente no le añade la etiqueta; no descarta la línea.
+    # `configure_logging` (app/infra/logging.py) emits one JSON line per
+    # event -- that's where the `level` label comes from, without touching
+    # the app at all. If a line isn't valid JSON (another container, a
+    # multi-line traceback), this stage just doesn't add the label to it;
+    # it doesn't drop the line.
     pipeline_stages:
       - json:
           expressions:

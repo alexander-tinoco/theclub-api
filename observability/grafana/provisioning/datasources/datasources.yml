@@ -1,5 +1,5 @@
-# Provisioning de datasources: Grafana los crea solos al arrancar, no hace
-# falta darlos de alta a mano desde la UI cada vez que se recrea el volumen.
+# Datasource provisioning: Grafana creates them on its own at startup, no
+# need to add them by hand from the UI every time the volume gets recreated.
 apiVersion: 1
 
 datasources:

@@ -1,6 +1,6 @@
-# Modo single-binary, almacenamiento en disco local -- de sobra para dev.
-# Nada de esto sirve tal cual para un despliegue multi-nodo real (ahí
-# haría falta un object store y un ring distribuido, no `inmemory`).
+# Single-binary mode, local disk storage -- plenty for dev. None of this
+# works as-is for a real multi-node deployment (that would need an object
+# store and a distributed ring, not `inmemory`).
 auth_enabled: false
 
 server:
