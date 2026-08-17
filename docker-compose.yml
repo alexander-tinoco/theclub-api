@@ -93,12 +93,21 @@ services:
     image: prom/prometheus:v3.0.1
     volumes:
       - ./observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./observability/prometheus/rules:/etc/prometheus/rules:ro
       - prometheus-data:/prometheus
     ports:
       - "${PROMETHEUS_PORT:-9091}:9090"
     depends_on:
       api:
         condition: service_healthy
+
+  alertmanager:
+    image: prom/alertmanager:v0.28.0
+    volumes:
+      - ./observability/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager-data:/alertmanager
+    ports:
+      - "${ALERTMANAGER_PORT:-9093}:9093"
 
   loki:
     image: grafana/loki:3.1.0
@@ -137,6 +146,7 @@ services:
     depends_on:
       - prometheus
       - loki
+      - alertmanager
 
 volumes:
   postgres-data:
@@ -144,3 +154,4 @@ volumes:
   prometheus-data:
   loki-data:
   grafana-data:
+  alertmanager-data:

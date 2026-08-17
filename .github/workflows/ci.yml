@@ -1,0 +1,116 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync --locked
+      - run: make lint
+
+  typecheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync --locked
+      - run: make typecheck
+
+  # Contrato versionado en contracts/openapi.json (scripts/export_openapi.py):
+  # sin DB ni Kafka -- app.openapi() solo introspecciona rutas, no toca IO.
+  contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync --locked
+      - run: make openapi-check
+
+  docker-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: runtime
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: theclub
+          POSTGRES_PASSWORD: theclub
+          POSTGRES_DB: theclub
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U theclub -d theclub"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      APP_ENV: test
+      DATABASE_URL: postgresql+psycopg://theclub:theclub@localhost:5432/theclub
+      REDIS_URL: redis://localhost:6379/0
+      KAFKA_BOOTSTRAP_SERVERS: localhost:19092
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync --locked
+
+      # Redpanda no puede ir en `services:`: ese mecanismo no permite pasarle
+      # el comando propio (`redpanda start --advertise-kafka-addr=...`) que
+      # necesita para anunciarse en localhost, así que se levanta a mano con
+      # --network host -- mismo listener "external" que docker-compose.yml
+      # usa para el host, mismo puerto (19092) que en local.
+      - name: Levantar Redpanda
+        run: |
+          docker run -d --name redpanda --network host \
+            redpandadata/redpanda:v24.2.7 \
+            redpanda start --mode dev-container --smp 1 --default-log-level=warn \
+            --kafka-addr=PLAINTEXT://0.0.0.0:19092 \
+            --advertise-kafka-addr=PLAINTEXT://localhost:19092
+      - name: Esperar a que Redpanda esté sano
+        run: timeout 60 bash -c 'until docker exec redpanda rpk cluster health | grep -q "Healthy:.*true"; do sleep 2; done'
+
+      - name: Migrar la base de datos
+        run: make db-upgrade
+      - name: alembic check (deriva entre modelos y migraciones)
+        run: make db-check
+
+      - name: Tests con cobertura
+        run: make test-cov

@@ -1,0 +1,16 @@
+# Sin un canal externo real que conectar en un proyecto de portafolio, el
+# receiver por defecto ("default") no manda nada afuera -- las alertas se
+# ven igual en la UI propia de Alertmanager (http://localhost:9093) y en
+# Grafana (datasource "Alertmanager", provisionado junto con Prometheus y
+# Loki). Cablear Slack de verdad es agregar `slack_configs` con un
+# `api_url` real bajo el receiver "default" -- no hace falta tocar nada
+# más de esta config ni de las reglas de Prometheus.
+route:
+  receiver: default
+  group_by: ["alertname"]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+
+receivers:
+  - name: default

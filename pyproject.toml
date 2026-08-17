@@ -81,7 +81,7 @@ known-first-party = ["app", "tests"]
 strict = true
 warn_unreachable = true
 plugins = ["pydantic.mypy"]
-files = ["app", "tests"]
+files = ["app", "tests", "scripts"]
 
 [[tool.mypy.overrides]]
 module = "tests.*"
@@ -112,4 +112,5 @@ branch = true
 
 [tool.coverage.report]
 show_missing = true
+fail_under = 95
 exclude_lines = ["pragma: no cover", "if TYPE_CHECKING:"]

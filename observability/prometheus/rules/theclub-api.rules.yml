@@ -1,0 +1,51 @@
+# Todas sobre métricas que ya expone /metrics (app/infra/metrics.py) --
+# ninguna alerta aquí depende de algo que no se pueda ver hoy mismo en el
+# dashboard de Grafana. La única pendiente a propósito -- backlog del
+# outbox -- necesita una métrica que todavía no existe; se añade en una
+# fase aparte, no aquí.
+groups:
+  - name: theclub-api
+    rules:
+      - alert: APIDown
+        expr: up{job="theclub-api"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "theclub-api no responde a Prometheus"
+          description: "El target theclub-api lleva más de 1m sin poder scrapearse."
+
+      - alert: HighErrorRate
+        expr: |
+          sum(rate(http_requests_total{status_code=~"5.."}[5m]))
+          /
+          sum(rate(http_requests_total[5m]))
+          > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Tasa de errores 5xx por encima del 5%"
+          description: "Más del 5% de las peticiones de los últimos 5m terminaron en 5xx."
+
+      - alert: HighLatencyP95
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le) (rate(http_request_duration_seconds_bucket[5m]))
+          ) > 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Latencia p95 por encima de 1s"
+          description: "El percentil 95 de duración de petición lleva 5m por encima de 1s."
+
+      - alert: WsConnectionsNearLimit
+        expr: ws_connections_active / ws_connections_limit > 0.9
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Conexiones WebSocket cerca del límite configurado"
+          description: "ws_connections_active superó el 90% de WS_MAX_CONNECTIONS durante 2m."

@@ -26,6 +26,16 @@ ws_connections_active = Gauge(
     "Conexiones WebSocket activas ahora mismo",
 )
 
+#: Se fija una sola vez al arrancar, con `settings.WS_MAX_CONNECTIONS` (ver
+#: `create_app`) -- así la alerta `WsConnectionsNearLimit` de Prometheus
+#: puede comparar `ws_connections_active` contra el límite real sin
+#: hardcodear ese número también en `theclub-api.rules.yml`, donde se
+#: desincronizaría en silencio el día que alguien cambie uno sin el otro.
+ws_connections_limit = Gauge(
+    "ws_connections_limit",
+    "Tope configurado de conexiones WebSocket simultáneas (WS_MAX_CONNECTIONS)",
+)
+
 ws_connections_total = Counter(
     "ws_connections_total",
     "Conexiones WebSocket aceptadas desde que arrancó el proceso",

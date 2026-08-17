@@ -39,6 +39,7 @@ curl localhost:8010/ready    # {"status":"ready","checks":{"database":"ok"}}
 | Grafana | http://localhost:3002 (sin login, entra directo) | `GRAFANA_PORT` |
 | Prometheus | http://localhost:9091 | `PROMETHEUS_PORT` |
 | Loki | http://localhost:3100 | `LOKI_PORT` |
+| Alertmanager | http://localhost:9093 | `ALERTMANAGER_PORT` |
 
 Los puertos publicados en el host se eligieron para no chocar con los 8000/8080 que
 suelen ocupar otros proyectos. Si alguno te estorba, cámbialo en tu `.env`.
@@ -54,6 +55,7 @@ make dev
 ```bash
 make test        # todos los tests
 make test-unit   # solo los que no necesitan servicios levantados
+make test-cov    # todos los tests con cobertura (falla por debajo del umbral)
 make lint        # ruff (lint + formato)
 make typecheck   # mypy en modo estricto
 make check       # lo mismo que exige el CI
@@ -62,6 +64,10 @@ make reset       # tira los servicios y BORRA los volúmenes
 make db-upgrade   # aplica las migraciones pendientes
 make db-downgrade # revierte la última migración
 make db-revision m="mensaje"  # autogenera una migración a partir de los modelos
+make db-check     # falla si los modelos y las migraciones commiteadas divergieron
+
+make openapi       # regenera contracts/openapi.json a partir del código actual
+make openapi-check # falla si contracts/openapi.json no coincide con el código actual
 ```
 
 ## Endpoints
@@ -716,6 +722,34 @@ Cuatro servicios nuevos en `docker-compose.yml`, todos con su configuración ver
 de lo habitual por el mismo motivo que `REDIS_PORT=6389`: no chocar con otro proyecto local
 que ya use el puerto estándar.
 
+### Alertas: Alertmanager
+
+Un quinto servicio, `alertmanager`, recibe lo que dispare Prometheus a partir de
+`observability/prometheus/rules/theclub-api.rules.yml` — cuatro reglas, todas sobre métricas
+que `/metrics` ya exponía, ninguna inventada para la ocasión:
+
+| Alerta | Dispara cuando | Severidad |
+|---|---|---|
+| `APIDown` | `up{job="theclub-api"} == 0` durante 1m | critical |
+| `HighErrorRate` | más del 5% de las peticiones de los últimos 5m terminaron en 5xx | warning |
+| `HighLatencyP95` | la p95 de duración de petición lleva 5m por encima de 1s | warning |
+| `WsConnectionsNearLimit` | `ws_connections_active` supera el 90% de `WS_MAX_CONNECTIONS` durante 2m | warning |
+
+La última necesitó una métrica nueva, `ws_connections_limit` (`app/infra/metrics.py`), fijada
+una sola vez al arrancar con `settings.WS_MAX_CONNECTIONS` (`app/main.py`) — sin ella, el
+umbral habría quedado hardcodeado dos veces (en `Settings` y en la regla de Prometheus) y se
+habría desincronizado el día que alguien cambie uno sin el otro.
+
+Sin un canal externo real que conectar en un proyecto de portafolio, el receiver por defecto
+de `alertmanager.yml` no manda nada afuera — las alertas se ven igual en la UI propia de
+Alertmanager y en Grafana (datasource "Alertmanager", provisionado junto con Prometheus y
+Loki). Cablear Slack de verdad es agregar `slack_configs` con un `api_url` real bajo ese
+receiver, sin tocar nada más.
+
+Pendiente a propósito, para una fase aparte: una alerta de "outbox atascado" (dinero que no
+llega a Kafka) sería la más valiosa del sistema, pero hoy no hay métrica de backlog del
+outbox en `app/infra/metrics.py` — añadirla es una decisión de diseño, no una línea suelta.
+
 Un bug real, encontrado escribiendo el test de la línea canónica, no por el propio
 código de esta fase: la fixture de sesión de los tests de integración corre
 `alembic upgrade head` **en el mismo proceso** que pytest (a diferencia de producción,
@@ -802,6 +836,35 @@ prueba 205 peticiones seguidas contra `/auth/me` y comprueba que las últimas 5 
 Se confirmó manualmente que los tres tests fallan si se revierte el arreglo
 correspondiente por separado.
 
+## CI
+
+`.github/workflows/ci.yml`, cinco jobs en paralelo (no uno secuencial: lint y typecheck
+fallan en segundos sin esperar a que levanten Postgres/Redpanda/Redis):
+
+| Job | Qué hace |
+|---|---|
+| `lint` | `make lint` — `ruff check` + `ruff format --check` |
+| `typecheck` | `make typecheck` — `mypy` en modo estricto |
+| `contracts` | `make openapi-check` — regenera `contracts/openapi.json` desde el código actual (`scripts/export_openapi.py`) y falla si diverge del commiteado |
+| `docker-build` | `docker build --target runtime .` — que el Dockerfile siga construyendo, sin publicar nada a ningún registro |
+| `test` | Postgres + Redis como `services:` de GitHub Actions, Redpanda levantado a mano (ver nota abajo); `alembic upgrade head` → `make db-check` → `make test-cov` |
+
+Los mismos comandos que corre CI son los que expone `make check` — no hay una versión
+"para CI" y otra "para tu máquina" que puedan divergir en silencio.
+
+**Por qué Redpanda no va en `services:`**: ese mecanismo de GitHub Actions no permite
+pasarle un comando propio al contenedor, y Redpanda necesita `--advertise-kafka-addr` para
+anunciarse en `localhost` (el mismo listener "external" que ya usa `docker-compose.yml` para
+que el host pueda hablarle). Se levanta con `docker run --network host` en un paso aparte del
+job `test`, verificado con `rpk cluster health` antes de seguir. Confirmado a mano antes de
+comitear: exactamente el mismo comando, corrido en esta máquina fuera de compose, arranca
+sano.
+
+`fail_under = 95` en `pyproject.toml` (`[tool.coverage.report]`) es el piso real de
+cobertura, no un número decorativo — la cobertura actual (ver más abajo) está varios puntos
+por encima, así que deja margen antes de romper el build por una resta razonable, pero una
+regresión de verdad sí lo dispara.
+
 ## Calidad y testing
 
 ### Metodología
@@ -868,11 +931,12 @@ automatizada de código/seguridad, y darse cuenta de que algo no cuadraba.
 ### Cobertura
 
 ```
-TOTAL   1670 stmts   11 miss   206 branch   13 partial   99% cover
+TOTAL   1688 stmts   11 miss   208 branch   13 partial   99% cover
 ```
 
-Sin umbral mínimo en CI todavía (`pytest-cov` está configurado; el `--cov-fail-under`
-se decide en la Fase 9). Los huecos que quedan están identificados, no son descuido:
+CI exige `fail_under = 95` (`pyproject.toml`, `[tool.coverage.report]`) — un piso real, no
+decorativo: la cobertura actual le deja margen a una resta razonable, pero una regresión de
+verdad sí rompe el build. Los huecos que quedan están identificados, no son descuido:
 
 | Dónde | Qué falta cubrir | Por qué |
 |---|---|---|
@@ -912,6 +976,13 @@ entre redeploys), rotación de `JWT_SECRET` sin invalidar sesiones activas
 (`JWT_PREVIOUS_SECRETS`), el recorrido de punta a punta de la sección de verificación
 del plan convertido en test (`tests/e2e/`), y el stack de observabilidad completo
 (Prometheus, Grafana con datasources y dashboard provisionados como código, Loki y
-Promtail) — ver la sección correspondiente más arriba.
+Promtail) — ver la sección correspondiente más arriba. Y, junto con el resto del stack de
+observabilidad, Alertmanager con cuatro reglas de alerta sobre métricas reales (ver
+"Alertas: Alertmanager").
 
-Siguiente: Fase 9 — CI.
+Fase 9 (CI) completada: `.github/workflows/ci.yml` con lint, typecheck, verificación de
+`contracts/openapi.json`, build del Dockerfile y tests con cobertura (`fail_under = 95`)
+contra Postgres, Redis y Redpanda reales, más `alembic check` contra deriva de modelos —
+ver la sección "CI" más arriba.
+
+No queda ninguna fase pendiente del plan original.

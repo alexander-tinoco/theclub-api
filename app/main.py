@@ -27,6 +27,7 @@ from app.events.relay import relay_loop
 from app.infra.db import create_engine, create_session_factory
 from app.infra.kafka import check_kafka, create_producer
 from app.infra.logging import configure_logging
+from app.infra.metrics import ws_connections_limit
 from app.infra.redis import check_redis, create_redis_client
 from app.ws.broadcaster import InMemoryBroadcaster
 from app.ws.connections import ConnectionRegistry
@@ -114,6 +115,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app.state.ws_broadcaster = InMemoryBroadcaster()
     app.state.ws_connections = ConnectionRegistry(max_connections=settings.WS_MAX_CONNECTIONS)
+    ws_connections_limit.set(settings.WS_MAX_CONNECTIONS)
     app.state.ws_connect_rate_limiter = WsConnectRateLimiter(
         redis_client,
         max_attempts=settings.WS_CONNECT_RATE_LIMIT_ATTEMPTS,
