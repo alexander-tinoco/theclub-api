@@ -7,6 +7,7 @@
   <img src="https://img.shields.io/badge/FastAPI-async-009688?style=flat-square&logo=fastapi&logoColor=white" alt="FastAPI">
   <img src="https://img.shields.io/badge/coverage-99%25-brightgreen?style=flat-square" alt="Coverage 99%">
   <img src="https://img.shields.io/badge/docker-ready-2496ED?style=flat-square&logo=docker&logoColor=white" alt="Docker ready">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="MIT License"></a>
 </p>
 
 The Club's game engine: resolves European roulette rounds, moves money with ledger-grade
@@ -82,6 +83,42 @@ sequenceDiagram
 ```
 </details>
 
+## Engineering highlights
+
+Patterns and decisions worth a second look:
+
+- **Money never touches a float.** Every amount is a `BIGINT` in minor units. Debits are a
+  single `UPDATE wallets SET balance = balance - :stake WHERE balance >= :stake RETURNING
+  balance` — no read-then-write, no race window. Verified with a test that fires 10 truly
+  concurrent requests (`asyncio.gather`, not a loop) at the same idempotency key and checks
+  the database ends up debited exactly once.
+- **Outbox pattern, not dual-writes.** Every domain event is inserted into an `outbox` table
+  in the *same transaction* as the business write. A background relay (`FOR UPDATE SKIP
+  LOCKED`, exponential backoff) publishes to Kafka afterward — a broker outage delays
+  events, it never loses or duplicates money.
+- **Idempotency as a first-class concern**, not a decorator: `Idempotency-Key` is required
+  on every state-changing endpoint, backed by a 3-transaction claim/execute/reconcile
+  mechanism that handles genuinely concurrent duplicate requests, not just sequential
+  retries.
+- **Provably fair RNG.** HMAC-SHA256 commit-reveal with rejection sampling (never `hash %
+  37`, which is measurably biased) — any player can recompute a spin once the server seed
+  is revealed.
+- **JWT auth done properly**: short-lived access tokens, opaque (non-JWT) refresh tokens
+  with rotation and reuse detection that revokes the entire token family on theft, and
+  zero-downtime secret rotation (`JWT_PREVIOUS_SECRETS`) so rotating the signing key doesn't
+  log everyone out.
+- **Structured, correlated logging.** One canonical JSON line per request/connection
+  (`request_id`, `user_id`, status, duration, business fields) via `contextvars` and a
+  custom ASGI middleware — not scattered `logger.info` calls, and not `BaseHTTPMiddleware`
+  (which silently breaks WebSocket support and context propagation).
+- **Real integration tests, not mocks.** The suite runs against actual Postgres, Redis, and
+  Kafka containers — including a test that kills the real Redpanda container mid-bet to
+  verify the outbox survives a broker outage, and a Hypothesis-based property test that
+  fuzzes the roulette payout math.
+- **Observability as code.** Prometheus, Grafana (datasources + dashboard), Loki, and
+  Alertmanager are entirely provisioned via committed config — nothing clicked together in
+  a UI.
+
 ## Quick start
 
 Requires [uv](https://docs.astral.sh/uv/) and Docker.
@@ -136,8 +173,15 @@ against the code in CI) or `/docs` once the API is running.
 
 ## Tech stack
 
-FastAPI · PostgreSQL · SQLAlchemy 2.0 (async) · Alembic · Kafka (Redpanda) · Redis ·
-Prometheus · Grafana · Loki · Alertmanager · Docker · pytest · GitHub Actions
+| Layer | Choices |
+|---|---|
+| API | FastAPI, Pydantic v2, WebSockets, `slowapi` (rate limiting) |
+| Data | PostgreSQL, SQLAlchemy 2.0 (async), Alembic, Redis |
+| Messaging | Kafka (Redpanda), `aiokafka` |
+| Auth | PyJWT, `argon2-cffi` (Argon2id password hashing) |
+| Observability | Prometheus, Grafana, Loki, Promtail, Alertmanager |
+| Testing | pytest, pytest-asyncio, Hypothesis (property-based), httpx, coverage.py |
+| Tooling | Docker, Docker Compose, GitHub Actions, uv, ruff, mypy (strict) |
 
 ## Status
 
@@ -160,3 +204,4 @@ All 10 phases of the original plan are complete.
   `theclub-web`/`theclub-data`.
 - [`CLAUDE.md`](CLAUDE.md) — how this repo is built with Claude Code (role-based workflow,
   commit conventions).
+- [`LICENSE`](LICENSE) — MIT.
