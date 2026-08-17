@@ -8,7 +8,7 @@ from fastapi import APIRouter, Request, status
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 from app.api.deps import CurrentUserDep, SessionDep, SettingsDep
-from app.api.rate_limit import limiter
+from app.api.rate_limit import GLOBAL_RATE_LIMIT, limiter
 from app.services import auth as auth_service
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -85,12 +85,16 @@ async def refresh(
 
 
 @router.get("/me", response_model=UserResponse)
-async def me(user: CurrentUserDep) -> UserResponse:
+@limiter.limit(GLOBAL_RATE_LIMIT)
+async def me(request: Request, user: CurrentUserDep) -> UserResponse:
     return UserResponse(
         id=user.id, email=user.email, status=user.status, created_at=user.created_at
     )
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
-async def logout(body: RefreshRequest, user: CurrentUserDep, session: SessionDep) -> None:
+@limiter.limit(GLOBAL_RATE_LIMIT)
+async def logout(
+    request: Request, body: RefreshRequest, user: CurrentUserDep, session: SessionDep
+) -> None:
     await auth_service.logout(session, user_id=user.id, raw_refresh_token=body.refresh_token)

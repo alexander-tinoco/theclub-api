@@ -9,7 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.api.deps import BroadcasterDep, CurrentUserDep, SessionDep, SessionFactoryDep, SettingsDep
 from app.api.pagination import decode_cursor, encode_cursor
-from app.api.rate_limit import limiter
+from app.api.rate_limit import GLOBAL_RATE_LIMIT, limiter
 from app.api.request_context import bind_canonical
 from app.services import wallet as wallet_service
 from app.services.idempotency import IDEMPOTENCY_KEY_MAX_LENGTH, hash_request_body, run_idempotent
@@ -24,7 +24,10 @@ class BalanceResponse(BaseModel):
 
 
 @router.get("/balance", response_model=BalanceResponse)
-async def get_balance(user: CurrentUserDep, session: SessionDep) -> dict[str, Any]:
+@limiter.limit(GLOBAL_RATE_LIMIT)
+async def get_balance(
+    request: Request, user: CurrentUserDep, session: SessionDep
+) -> dict[str, Any]:
     result = await wallet_service.get_balance(session, user_id=user.id)
     return result.to_dict()
 
@@ -45,7 +48,9 @@ class TransactionsPage(BaseModel):
 
 
 @router.get("/transactions", response_model=TransactionsPage)
+@limiter.limit(GLOBAL_RATE_LIMIT)
 async def list_transactions(
+    request: Request,
     user: CurrentUserDep,
     session: SessionDep,
     cursor: str | None = Query(default=None),

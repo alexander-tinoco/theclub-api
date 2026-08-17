@@ -9,7 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.api.deps import BroadcasterDep, CurrentUserDep, SessionDep, SessionFactoryDep, SettingsDep
 from app.api.pagination import decode_cursor, encode_cursor
-from app.api.rate_limit import limiter
+from app.api.rate_limit import GLOBAL_RATE_LIMIT, limiter
 from app.api.request_context import bind_canonical
 from app.domain.roulette.bets import Selection
 from app.domain.roulette.table import BetType
@@ -40,13 +40,19 @@ class FairnessRotateResponse(BaseModel):
 
 
 @router.get("/fairness/current", response_model=FairnessCurrentResponse)
-async def fairness_current(user: CurrentUserDep, session: SessionDep) -> dict[str, Any]:
+@limiter.limit(GLOBAL_RATE_LIMIT)
+async def fairness_current(
+    request: Request, user: CurrentUserDep, session: SessionDep
+) -> dict[str, Any]:
     result = await fairness_service.get_current_seed(session, user_id=user.id)
     return result.to_dict()
 
 
 @router.post("/fairness/rotate", response_model=FairnessRotateResponse)
-async def fairness_rotate(user: CurrentUserDep, session: SessionDep) -> dict[str, Any]:
+@limiter.limit(GLOBAL_RATE_LIMIT)
+async def fairness_rotate(
+    request: Request, user: CurrentUserDep, session: SessionDep
+) -> dict[str, Any]:
     result = await fairness_service.rotate_seed(session, user_id=user.id)
     return result.to_dict()
 
@@ -156,7 +162,9 @@ class RoundHistoryPage(BaseModel):
 
 
 @router.get("/rounds", response_model=RoundHistoryPage)
+@limiter.limit(GLOBAL_RATE_LIMIT)
 async def list_rounds(
+    request: Request,
     user: CurrentUserDep,
     session: SessionDep,
     cursor: str | None = Query(default=None),
