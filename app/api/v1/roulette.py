@@ -13,6 +13,7 @@ from app.api.rate_limit import GLOBAL_RATE_LIMIT, limiter
 from app.api.request_context import bind_canonical
 from app.domain.roulette.bets import Selection
 from app.domain.roulette.table import BetType
+from app.infra.metrics import bets_placed_total
 from app.services import fairness as fairness_service
 from app.services import roulette as roulette_service
 from app.services.exceptions import DataIntegrityError
@@ -138,11 +139,13 @@ async def create_round(
     # impide `run_idempotent`, no esto).
     await broadcaster.publish(user.id, {"type": "round.settled", **result})
 
+    any_won = any(bet["won"] for bet in result["bets"])
+    bets_placed_total.labels(won=str(any_won).lower()).inc()
     bind_canonical(
         round_id=result["round_id"],
         outcome=result["outcome"],
         bet_count=len(result["bets"]),
-        won=any(bet["won"] for bet in result["bets"]),
+        won=any_won,
         total_stake_minor=result["total_stake_minor"],
         net_minor=result["net_minor"],
     )

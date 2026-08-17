@@ -8,6 +8,8 @@ import contextlib
 
 from fastapi import WebSocket
 
+from app.infra.metrics import ws_connections_active, ws_connections_total
+
 
 class ConnectionRegistry:
     def __init__(self, *, max_connections: int) -> None:
@@ -18,10 +20,14 @@ class ConnectionRegistry:
         if len(self._connections) >= self._max_connections:
             return False
         self._connections.add(websocket)
+        ws_connections_active.inc()
+        ws_connections_total.inc()
         return True
 
     def unregister(self, websocket: WebSocket) -> None:
-        self._connections.discard(websocket)
+        if websocket in self._connections:
+            self._connections.discard(websocket)
+            ws_connections_active.dec()
 
     async def close_all(self, *, code: int = 1001) -> None:
         """Manda el frame de cierre a cada conexión activa. No espera a que
@@ -30,6 +36,7 @@ class ConnectionRegistry:
         """
         connections = list(self._connections)
         self._connections.clear()
+        ws_connections_active.dec(len(connections))
         for websocket in connections:
             with contextlib.suppress(Exception):
                 await websocket.close(code=code)

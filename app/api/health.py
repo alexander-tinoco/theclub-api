@@ -18,6 +18,7 @@ from fastapi import APIRouter, Request, Response, status
 from pydantic import BaseModel
 
 from app.api.deps import SettingsDep
+from app.infra.metrics import render_latest
 
 logger = logging.getLogger(__name__)
 
@@ -100,3 +101,13 @@ async def ready(request: Request, response: Response) -> ReadyResponse:
     healthy = all(state == "ok" for state in checks.values())
     response.status_code = status.HTTP_200_OK if healthy else status.HTTP_503_SERVICE_UNAVAILABLE
     return ReadyResponse(status="ready" if healthy else "degraded", checks=checks)
+
+
+@router.get("/metrics", summary="Métricas Prometheus")
+async def metrics() -> Response:
+    """Sin autenticación: en un despliegue real esto se restringe a nivel de
+    red (no expuesto a internet, solo al scraper de Prometheus), no con un
+    token de aplicación — es la convención estándar para este endpoint.
+    """
+    body, content_type = render_latest()
+    return Response(content=body, media_type=content_type)

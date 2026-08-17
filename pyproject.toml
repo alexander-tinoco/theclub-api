@@ -17,6 +17,7 @@ dependencies = [
     "email-validator>=2.2",
     "aiokafka>=0.11",
     "websockets>=13",
+    "prometheus-client>=0.26.0",
 ]
 
 [dependency-groups]
